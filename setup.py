@@ -24,6 +24,8 @@ setup(
     packages=find_packages(),
     python_requires='>=3.6',
 
+    package_data={'stardist_napari': [ 'resources/*' ]},
+
     entry_points={'napari.plugin': 'StarDist = stardist_napari'},
 
     classifiers=[
