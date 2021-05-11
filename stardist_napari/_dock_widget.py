@@ -1,6 +1,5 @@
 """
 TODO:
-- error when running the plugin multiple times with shape/surface output (https://github.com/napari/napari/issues/2354)
 - support timelapse or channel-wise processing (incl. progress display)
 - ability to cancel running stardist computation
 - run only on field of view
@@ -9,8 +8,6 @@ TODO:
 - normalize image separately per channel or jointly
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
-- move to stardist/stardist-napari repo
-- sample data hook
 """
 
 from napari_plugin_engine import napari_hook_implementation
@@ -195,6 +192,9 @@ def plugin_wrapper():
     ) -> List[napari.types.LayerDataTuple]:
 
         model = get_model(*model_selected)
+        if model._is_multiclass():
+            warn("multi-class mode not supported yet, ignoring classification output")
+
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
@@ -234,16 +234,21 @@ def plugin_wrapper():
             use_app().process_events()
 
         # TODO: possible to run this in a way that it can be canceled?
-        (labels,polys), (prob,dist) = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
-                                                              n_tiles=n_tiles, show_tile_progress=progress, return_predict=True)
+        pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
+                                       n_tiles=n_tiles, show_tile_progress=progress,
+                                       sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
         layers = []
         if cnn_output:
+            (labels,polys), cnn_out = pred
+            prob, dist = cnn_out[:2]
             scale = tuple(model.config.grid)
             dist = np.moveaxis(dist, -1,0)
             layers.append((dist, dict(name='StarDist distances',   scale=(1,)+scale, **lkwargs), 'image'))
             layers.append((prob, dict(name='StarDist probability', scale=     scale, **lkwargs), 'image'))
+        else:
+            labels,polys = pred
 
         if output_type in (Output.Labels.value,Output.Both.value):
             layers.append((labels, dict(name='StarDist labels', **lkwargs), 'labels'))
