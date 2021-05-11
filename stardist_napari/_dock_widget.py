@@ -61,8 +61,8 @@ def plugin_wrapper():
     from csbdeep.utils import _raise, normalize, axes_check_and_normalize, axes_dict
     from csbdeep.models.pretrained import get_registered_models, get_model_folder
     from csbdeep.utils import load_json
-    from .models import StarDist2D, StarDist3D
-    from .utils import abspath
+    from stardist.models import StarDist2D, StarDist3D
+    from stardist.utils import abspath
 
     DEBUG = False
 
