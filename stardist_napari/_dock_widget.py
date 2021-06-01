@@ -200,20 +200,22 @@ def plugin_wrapper():
         axes = axes_check_and_normalize(axes, length=x.ndim)
         if norm_image:
             # TODO: address joint vs. channel-separate normalization properly (let user choose)
-            if 'C' not in axes or image.rgb == True:
+            if 'C' not in axes or image.rgb == True or 'T' in axes:
                  # normalize channels jointly
                 _axis = None
             else:
                 # normalize channels independently
                 _axis = tuple(i for i in range(x.ndim) if i != axes_dict(axes)['C']) if 'C' in axes else None
+            print(x.shape, type(x), _axis)
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
-        if n_tiles is not None and np.prod(n_tiles) > 1:
-            n_tiles = tuple(n_tiles)
+        if 'T' in axes or (n_tiles is not None and np.prod(n_tiles) > 1):
+            n_tiles = tuple(n_tiles) if n_tiles is not None else (1,)*(x.ndim-1)
             app = use_app()
+            n_time = x.shape[axes.index('T')]
             def progress(it, **kwargs):
                 progress_bar.label = 'Neural Network Prediction'
-                progress_bar.range = (0, kwargs.get('total',0))
+                progress_bar.range = (0, kwargs.get('total',0)*n_time)
                 progress_bar.value = 0
                 progress_bar.show()
                 app.process_events()
@@ -233,10 +235,25 @@ def plugin_wrapper():
             progress_bar.show()
             use_app().process_events()
 
-        # TODO: possible to run this in a way that it can be canceled?
-        pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
-                                       n_tiles=n_tiles, show_tile_progress=progress,
-                                       sparse=(not cnn_output), return_predict=cnn_output)
+        if 'T' in axes:
+            x_reorder = np.moveaxis(x,axes.index('T'),0)
+            axes_reorder = axes.replace('T','')
+            labels, polys = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
+                                           n_tiles=n_tiles, show_tile_progress=progress,
+                                                 sparse=(not cnn_output), return_predict=cnn_output) for _x in x_reorder)))
+
+            labels = np.stack(labels)
+            polys=dict(
+                coord= np.concatenate(tuple(np.concatenate([t*np.ones((p['coord'].shape[0],1,p['coord'].shape[2])), p['coord']], axis=1) for t,p in enumerate(polys)),axis=0),
+                points= np.concatenate(tuple(np.concatenate([t*np.ones((p['points'].shape[0],1)), p['points']], axis=1) for t,p in enumerate(polys)),axis=0)
+            )
+            pred = labels, polys
+            
+        else:
+            # TODO: possible to run this in a way that it can be canceled?
+            pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
+                                           n_tiles=n_tiles, show_tile_progress=progress,
+                                           sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
         layers = []
@@ -248,10 +265,12 @@ def plugin_wrapper():
             layers.append((dist, dict(name='StarDist distances',   scale=(1,)+scale, **lkwargs), 'image'))
             layers.append((prob, dict(name='StarDist probability', scale=     scale, **lkwargs), 'image'))
         else:
-            labels,polys = pred
+            labels, polys = pred
 
         if output_type in (Output.Labels.value,Output.Both.value):
             layers.append((labels, dict(name='StarDist labels', **lkwargs), 'labels'))
+
+            
         if output_type in (Output.Polys.value,Output.Both.value):
             n_objects = len(polys['points'])
             if isinstance(model, StarDist3D):
@@ -262,7 +281,7 @@ def plugin_wrapper():
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
                 # TODO: coordinates correct or need offset (0.5 or so)?
-                shapes = np.moveaxis(polys['coord'], 2,1)
+                shapes = np.moveaxis(polys['coord'], -1,-2)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
                                             edge_width=0.75, edge_color='yellow', face_color=[0,0,0,0], **lkwargs), 'shapes'))
         return layers
@@ -393,7 +412,7 @@ def plugin_wrapper():
                     # check if image and model are compatible
                     ch_model = config['n_channel_in']
                     ch_image = get_data(image).shape[axes_dict(axes_image)['C']] if 'C' in axes_image else 1
-                    all_valid = set(axes_model.replace('C','')) == set(axes_image.replace('C','')) and ch_model == ch_image
+                    all_valid = set(axes_model.replace('C','').replace('T','')) == set(axes_image.replace('C','').replace('T','')) and ch_model == ch_image
 
                     widgets_valid(plugin.image, plugin.model2d, plugin.model3d, plugin.model_folder.line_edit, valid=all_valid)
                     if all_valid:

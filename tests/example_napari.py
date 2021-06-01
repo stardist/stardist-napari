@@ -42,6 +42,19 @@ def show_napari_2d():
 
         viewer.window.add_plugin_dock_widget('StarDist')
 
+
+def show_napari_2d_time():
+    import napari
+    from scipy.ndimage import rotate
+    x = np.stack([rotate(test_image_nuclei_2d(), deg, reshape=False) for deg in np.linspace(0,50,11)])
+
+    with napari.gui_qt():
+        viewer =  napari.Viewer()
+
+        viewer.add_image(x)
+
+        viewer.window.add_plugin_dock_widget('StarDist')
+
 def show_napari_3d():
     import napari
     x = test_image_nuclei_3d()
@@ -55,5 +68,5 @@ def show_napari_3d():
         
 if __name__ == '__main__':
 
-    show_napari_2d()
+    show_napari_2d_time()
 
