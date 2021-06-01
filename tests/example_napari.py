@@ -2,9 +2,7 @@ import sys
 import numpy as np
 from stardist.models import Config3D, StarDist3D
 from stardist.data import  test_image_nuclei_2d, test_image_nuclei_3d
-from utils import circle_image, real_image3d, path_model3d
 from csbdeep.utils import normalize
-from conftest import _model3d
 
 
 def show_surface():
@@ -12,7 +10,7 @@ def show_surface():
     import napari
     
     model = _model3d()
-    img, mask = real_image3d()
+    img, mask = test_image_nuclei_3d(return_mask=True)
     x = normalize(img, 1, 99.8)
     labels, polys = model.predict_instances(x)
 
@@ -42,9 +40,7 @@ def show_napari_2d():
 
         viewer.add_image(x)
 
-        key = ("StarDist", "StarDist") 
-        
-        viewer.window._add_plugin_dock_widget(key)
+        viewer.window.add_plugin_dock_widget('StarDist')
 
 def show_napari_3d():
     import napari
@@ -55,11 +51,9 @@ def show_napari_3d():
 
         viewer.add_image(x)
 
-        key = ("StarDist", "StarDist") 
-        
-        viewer.window._add_plugin_dock_widget(key)
+        viewer.window.add_plugin_dock_widget('StarDist')
         
 if __name__ == '__main__':
 
-    show_napari_3d()
+    show_napari_2d()
 
