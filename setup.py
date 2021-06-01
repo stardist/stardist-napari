@@ -14,7 +14,7 @@ with open(path.join(_dir,'README.md'), encoding="utf-8") as f:
 setup(
     name='stardist-napari',
     version=__version__,
-    description='StarDist for Napari',
+    description='Object Detection with Star-convex Shapes',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/stardist/stardist-napari',
@@ -22,7 +22,7 @@ setup(
     author_email='research@uweschmidt.org, martin.weigert@epfl.ch',
     license='BSD 3-Clause License',
     packages=find_packages(),
-    python_requires='>=3.6',
+    python_requires='>=3.7',
 
     package_data={'stardist_napari': [ 'resources/*' ]},
 
@@ -34,9 +34,9 @@ setup(
         'Topic :: Scientific/Engineering',
         'License :: OSI Approved :: BSD License',
 
-        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
 
         'Framework :: napari',
     ],
@@ -45,6 +45,6 @@ setup(
         'stardist>=0.7.0',
         'tensorflow',
         'napari>=0.4.8',
-        # 'magicgui>0.2.9'
+        'magicgui>=0.2.9'
     ],
 )
