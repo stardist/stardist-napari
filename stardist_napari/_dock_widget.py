@@ -64,7 +64,9 @@ def plugin_wrapper():
     DEBUG = False
 
     def get_data(image):
-        return image.data[0] if image.multiscale else image.data
+        image = image.data[0] if image.multiscale else image.data
+        # enforce dense numpy array in case we are given a dask array etc
+        return np.asarray(image)
 
     def change_handler(*widgets, init=True, debug=DEBUG):
         def decorator_change_handler(handler):
