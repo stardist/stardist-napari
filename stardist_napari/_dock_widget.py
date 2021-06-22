@@ -208,7 +208,6 @@ def plugin_wrapper():
             else:
                 # normalize channels independently
                 _axis = tuple(i for i in range(x.ndim) if i != axes_dict(axes)['C']) if 'C' in axes else None
-            print(x.shape, type(x), _axis)
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
         if 'T' in axes or (n_tiles is not None and np.prod(n_tiles) > 1):
