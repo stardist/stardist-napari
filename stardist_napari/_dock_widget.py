@@ -241,31 +241,40 @@ def plugin_wrapper():
                                        sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
+        
         layers = []
         if cnn_output:
             (labels,polys), cnn_out = pred
             prob, dist = cnn_out[:2]
-            scale = tuple(model.config.grid)
+            scale = tuple(s1*s2 for s1, s2 in zip(image.scale, model.config.grid))
+            # small correction as napari centers object 
+            translate = tuple(0.5*(s-1) for s in model.config.grid)
             dist = np.moveaxis(dist, -1,0)
-            layers.append((dist, dict(name='StarDist distances',   scale=(1,)+scale, **lkwargs), 'image'))
-            layers.append((prob, dict(name='StarDist probability', scale=     scale, **lkwargs), 'image'))
+            layers.append((dist, dict(name='StarDist distances',
+                                      scale=(1,)+scale, translate=(0,)+translate,
+                                      **lkwargs), 'image'))
+            layers.append((prob, dict(name='StarDist probability',
+                                      scale=scale, translate=translate,
+                                      **lkwargs), 'image'))
         else:
             labels,polys = pred
 
         if output_type in (Output.Labels.value,Output.Both.value):
-            layers.append((labels, dict(name='StarDist labels', **lkwargs), 'labels'))
+            layers.append((labels, dict(name='StarDist labels', scale=image.scale, **lkwargs), 'labels'))
         if output_type in (Output.Polys.value,Output.Both.value):
             n_objects = len(polys['points'])
             if isinstance(model, StarDist3D):
                 surface = surface_from_polys(polys)
                 layers.append((surface, dict(name='StarDist polyhedra',
                                              contrast_limits=(0,surface[-1].max()),
+                                             scale=image.scale, 
                                              colormap=label_colormap(n_objects), **lkwargs), 'surface'))
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys['coord'], 2,1)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
+                                            scale=image.scale, 
                                             edge_width=0.75, edge_color='yellow', face_color=[0,0,0,0], **lkwargs), 'shapes'))
         return layers
 
