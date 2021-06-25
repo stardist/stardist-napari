@@ -8,6 +8,7 @@ TODO:
 - normalize image separately per channel or jointly
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
+- try progress bar via @thread_workers
 """
 
 from napari_plugin_engine import napari_hook_implementation
@@ -200,6 +201,11 @@ def plugin_wrapper():
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if not axes.startswith(model._axes_out.replace('C','')):
+            warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
+            # TODO: adjust image.scale according to shuffled axes
+
         if norm_image:
             # TODO: address joint vs. channel-separate normalization properly (let user choose)
             if 'C' not in axes or image.rgb == True:
@@ -241,13 +247,13 @@ def plugin_wrapper():
                                        sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
-        
+
         layers = []
         if cnn_output:
             (labels,polys), cnn_out = pred
             prob, dist = cnn_out[:2]
             scale = tuple(s1*s2 for s1, s2 in zip(image.scale, model.config.grid))
-            # small correction as napari centers object 
+            # small correction as napari centers object
             translate = tuple(0.5*(s-1) for s in model.config.grid)
             dist = np.moveaxis(dist, -1,0)
             layers.append((dist, dict(name='StarDist distances',
@@ -267,14 +273,14 @@ def plugin_wrapper():
                 surface = surface_from_polys(polys)
                 layers.append((surface, dict(name='StarDist polyhedra',
                                              contrast_limits=(0,surface[-1].max()),
-                                             scale=image.scale, 
+                                             scale=image.scale,
                                              colormap=label_colormap(n_objects), **lkwargs), 'surface'))
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys['coord'], 2,1)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
-                                            scale=image.scale, 
+                                            scale=image.scale,
                                             edge_width=0.75, edge_color='yellow', face_color=[0,0,0,0], **lkwargs), 'shapes'))
         return layers
 
