@@ -5,7 +5,7 @@
 
 This project provides the [napari](https://napari.org/) plugin for [StarDist](https://github.com/stardist/stardist), a deep learning based 2D and 3D object detection method with star-convex shapes. The plugin allows to apply pretrained and custom trained models from within napari.
 
-![Screenshot](https://github.com/stardist/stardist-napari/blob/main/images/stardist_napari_screenshot_small.png)
+![Screenshot](https://github.com/stardist/stardist-napari/raw/main/images/stardist_napari_screenshot_small.png)
 
 ## Installation & Usage
 
