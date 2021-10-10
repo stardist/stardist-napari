@@ -14,7 +14,7 @@ TODO:
 from napari_plugin_engine import napari_hook_implementation
 from magicgui import magicgui
 from magicgui import widgets as mw
-from magicgui.events import Event
+from magicgui.events import Event, Signal
 from magicgui.application import use_app
 
 import functools
@@ -25,9 +25,9 @@ from pathlib import Path
 from warnings import warn
 
 import napari
-from napari.qt.threading import thread_worker, create_worker
+from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
-from typing import List
+from typing import List, Union
 from enum import Enum
 
 
@@ -72,17 +72,16 @@ def plugin_wrapper():
     def change_handler(*widgets, init=True, debug=DEBUG):
         def decorator_change_handler(handler):
             @functools.wraps(handler)
-            def wrapper(event):
+            def wrapper(*args):
+                source = Signal.sender()
+                emitter = Signal.current_emitter()
                 if debug:
-                    if isinstance(event, Event):
-                        print(f"{event.type}: {event.source.name} = {event.value}")
-                    else:
-                        print(f"{handler.__name__}({str(event)})")
-                return handler(event)
+                    print(f"{emitter}: {source} = {args!r}")
+                return handler(*args)
             for widget in widgets:
                 widget.changed.connect(wrapper)
                 if init:
-                    widget.changed(value=widget.value)
+                    widget.changed(widget.value)
             return wrapper
         return decorator_change_handler
 
@@ -442,15 +441,16 @@ def plugin_wrapper():
 
     # hide percentile selection if normalization turned off
     @change_handler(plugin.norm_image)
-    def _norm_image_change(event):
-        widgets_inactive(plugin.perc_low, plugin.perc_high, active=event.value)
+    def _norm_image_change(active: bool):
+        widgets_inactive(plugin.perc_low, plugin.perc_high, active=active)
 
     # ensure that percentile low < percentile high
     @change_handler(plugin.perc_low)
-    def _perc_low_change(event):
+    def _perc_low_change():
         plugin.perc_high.value = max(plugin.perc_low.value+0.01, plugin.perc_high.value)
+
     @change_handler(plugin.perc_high)
-    def _perc_high_change(event):
+    def _perc_high_change():
         plugin.perc_low.value  = min(plugin.perc_low.value, plugin.perc_high.value-0.01)
 
     # -------------------------------------------------------------------------
@@ -458,22 +458,21 @@ def plugin_wrapper():
     # RadioButtons widget triggers a change event initially (either when 'value' is set in constructor, or via 'persist')
     # TODO: seems to be triggered too when a layer is added or removed (why?)
     @change_handler(plugin.model_type, init=False)
-    def _model_type_change(event):
-        selected = widget_for_modeltype[event.value]
+    def _model_type_change(model_type: Union[str, type]):
+        selected = widget_for_modeltype[model_type]
         for w in set((plugin.model2d, plugin.model3d, plugin.model_folder)) - {selected}:
             w.hide()
         selected.show()
         # trigger _model_change
-        selected.changed(value=selected.value)
+        selected.changed(selected.value)
 
 
     # show/hide model folder picker
     # load config/thresholds for selected pretrained model
     # -> triggered by _model_type_change
     @change_handler(plugin.model2d, plugin.model3d, init=False)
-    def _model_change(event):
-        model_class = StarDist2D if event.source == plugin.model2d else StarDist3D
-        model_name  = event.value
+    def _model_change(model_name: str):
+        model_class = StarDist2D if Signal.sender() is plugin.model2d else StarDist3D
         key = model_class, model_name
 
         if key not in model_configs:
@@ -512,8 +511,8 @@ def plugin_wrapper():
     # -> triggered by _model_type_change
     # note: will be triggered at every keystroke (when typing the path)
     @change_handler(plugin.model_folder, init=False)
-    def _model_folder_change(event):
-        path = Path(event.value)
+    def _model_folder_change(_path: str):
+        path = Path(_path)
         key = CUSTOM_MODEL, path
         try:
             if not path.is_dir(): return
@@ -528,8 +527,7 @@ def plugin_wrapper():
 
     # -> triggered by napari (if there are any open images on plugin launch)
     @change_handler(plugin.image, init=False)
-    def _image_change(event):
-        image = event.value
+    def _image_change(image: napari.layers.Image):
         ndim = get_data(image).ndim
         plugin.image.tooltip = f"Shape: {get_data(image).shape}"
 
@@ -544,16 +542,15 @@ def plugin_wrapper():
 
         if (axes == plugin.axes.value):
             # make sure to trigger a changed event, even if value didn't actually change
-            plugin.axes.changed(value=axes)
+            plugin.axes.changed(axes)
         else:
             plugin.axes.value = axes
-        plugin.n_tiles.changed(value=plugin.n_tiles.value)
+        plugin.n_tiles.changed(plugin.n_tiles.value)
 
 
     # -> triggered by _image_change
     @change_handler(plugin.axes, init=False)
-    def _axes_change(event):
-        value = str(event.value)
+    def _axes_change(value: str):
         if value != value.upper():
             with plugin.axes.changed.blocker():
                 plugin.axes.value = value.upper()
@@ -568,7 +565,7 @@ def plugin_wrapper():
 
     # -> triggered by _image_change
     @change_handler(plugin.n_tiles, init=False)
-    def _n_tiles_change(event):
+    def _n_tiles_change():
         image = plugin.image.value
         try:
             image is not None or _raise(ValueError("no image selected"))
@@ -593,7 +590,7 @@ def plugin_wrapper():
 
     # set thresholds to optimized values for chosen model
     @change_handler(plugin.set_thresholds, init=False)
-    def _set_thresholds(event):
+    def _set_thresholds():
         model_type = plugin.model_type.value
         if model_selected in model_threshs:
             thresholds = model_threshs[model_selected]
@@ -603,7 +600,7 @@ def plugin_wrapper():
 
     # restore defaults
     @change_handler(plugin.defaults_button, init=False)
-    def restore_defaults(event=None):
+    def restore_defaults():
         for k,v in DEFAULTS.items():
             getattr(plugin,k).value = v
 

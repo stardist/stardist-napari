@@ -3,12 +3,10 @@ import numpy as np
 from stardist.models import Config3D, StarDist3D
 from stardist.data import  test_image_nuclei_2d, test_image_nuclei_3d
 from csbdeep.utils import normalize
+import napari
 
 
 def show_surface():
-
-    import napari
-    
     model = _model3d()
     img, mask = test_image_nuclei_3d(return_mask=True)
     x = normalize(img, 1, 99.8)
@@ -25,35 +23,32 @@ def show_surface():
 
     surface = surface_from_polys(polys)
 
-    with napari.gui_qt(): 
-        # add the surface
-        viewer = napari.view_image(img) 
-        viewer.add_surface(surface) 
+    # add the surface
+    viewer = napari.view_image(img) 
+    viewer.add_surface(surface) 
 
 
 def show_napari_2d():
-    import napari
     x = test_image_nuclei_2d()
 
-    with napari.gui_qt():
-        viewer =  napari.Viewer()
+    viewer =  napari.Viewer()
 
-        viewer.add_image(x)
+    viewer.add_image(x)
 
-        viewer.window.add_plugin_dock_widget('StarDist')
+    viewer.window.add_plugin_dock_widget('StarDist')
 
 def show_napari_3d():
-    import napari
     x = test_image_nuclei_3d()
 
-    with napari.gui_qt():
-        viewer =  napari.Viewer()
+    viewer =  napari.Viewer()
 
-        viewer.add_image(x)
+    viewer.add_image(x)
 
-        viewer.window.add_plugin_dock_widget('StarDist')
+    viewer.window.add_plugin_dock_widget('StarDist')
         
 if __name__ == '__main__':
 
     show_napari_2d()
-
+    
+    if 'run' in sys.argv:
+        napari.run()
