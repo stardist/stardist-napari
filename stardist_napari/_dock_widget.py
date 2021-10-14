@@ -76,7 +76,8 @@ def plugin_wrapper():
                 source = Signal.sender()
                 emitter = Signal.current_emitter()
                 if debug:
-                    print(f"{emitter}: {source} = {args!r}")
+                    # print(f"{emitter}: {source} = {args!r}")
+                    print(f"{str(emitter.name).upper()}: {source.name} = {args!r}")
                 return handler(*args)
             for widget in widgets:
                 widget.changed.connect(wrapper)
@@ -552,7 +553,7 @@ def plugin_wrapper():
     @change_handler(plugin.axes, init=False)
     def _axes_change(value: str):
         if value != value.upper():
-            with plugin.axes.changed.blocker():
+            with plugin.axes.changed.blocked():
                 plugin.axes.value = value.upper()
         image = plugin.image.value
         try:
