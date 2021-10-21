@@ -8,6 +8,7 @@ TODO:
 - normalize image separately per channel or jointly
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
+- try progress bar via @thread_workers
 """
 
 from napari_plugin_engine import napari_hook_implementation
@@ -28,7 +29,7 @@ from napari.qt.threading import thread_worker, create_worker
 from napari.utils.colormaps import label_colormap
 from typing import List
 from enum import Enum
-
+from .match_labels import match_labels
 
 def surface_from_polys(polys):
     from stardist.geometry import dist_to_coord3D
@@ -49,7 +50,6 @@ def surface_from_polys(polys):
         rays_faces += len(xs)
 
     return [np.array(vertices), np.array(faces), np.array(values)]
-
 
 
 def plugin_wrapper():
@@ -131,7 +131,7 @@ def plugin_wrapper():
         perc_high    = 99.8,
         prob_thresh  = 0.5,
         nms_thresh   = 0.4,
-        output_type  = Output.Both.value,
+        output_type  = Output.Labels.value,
         n_tiles      = 'None',
         cnn_output   = False,
     )
@@ -200,6 +200,14 @@ def plugin_wrapper():
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if cnn_output and 'T' in axes:
+            raise NotImplementedError('CNN output currently not supported for timeseries!')
+
+        if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
+            warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
+            # TODO: adjust image.scale according to shuffled axes
+
         if norm_image:
             # TODO: address joint vs. channel-separate normalization properly (let user choose)
             if 'C' not in axes or image.rgb == True or 'T' in axes:
@@ -210,13 +218,12 @@ def plugin_wrapper():
                 _axis = tuple(i for i in range(x.ndim) if i != axes_dict(axes)['C']) if 'C' in axes else None
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
-        if 'T' in axes or (n_tiles is not None and np.prod(n_tiles) > 1):
+        if not 'T' in axes and n_tiles is not None and np.prod(n_tiles) > 1:
             n_tiles = tuple(n_tiles) if n_tiles is not None else (1,)*(x.ndim-1)
             app = use_app()
-            n_time = x.shape[axes.index('T')]
             def progress(it, **kwargs):
                 progress_bar.label = 'Neural Network Prediction'
-                progress_bar.range = (0, kwargs.get('total',0)*n_time)
+                progress_bar.range = (0, kwargs.get('total',0))
                 progress_bar.value = 0
                 progress_bar.show()
                 app.process_events()
@@ -229,6 +236,20 @@ def plugin_wrapper():
                 progress_bar.range = (0, 0)
                 app.process_events()
                 # TODO: progress bar doesn't update during NMS since events not processed?
+        elif 'T' in axes:
+            app = use_app()
+            n_times = x.shape[axes.index('T')]
+            def progress(it, **kwargs):
+                progress_bar.label = 'Neural Network Prediction'
+                progress_bar.range = (0, n_times)
+                progress_bar.value = 0
+                progress_bar.show()
+                app.process_events()
+                for item in it:
+                    yield item
+                    progress_bar.increment()
+                    app.process_events()
+                app.process_events()
         else:
             progress = False
             progress_bar.label = 'Neural Network Prediction'
@@ -239,14 +260,26 @@ def plugin_wrapper():
         if 'T' in axes:
             x_reorder = np.moveaxis(x,axes.index('T'),0)
             axes_reorder = axes.replace('T','')
-            labels, polys = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
-                                           n_tiles=n_tiles, show_tile_progress=progress,
-                                                 sparse=(not cnn_output), return_predict=cnn_output) for _x in x_reorder)))
+            labels, polys = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
+                                            prob_thresh=prob_thresh, nms_thresh=nms_thresh,
+                                            n_tiles=n_tiles,
+                                            sparse=(not cnn_output), return_predict=cnn_output)
+                                             for _x in progress(x_reorder))))
 
-            labels = np.stack(labels)
+            
+
+            # match labels in consecutive frames (-> simple IoU tracking)
+            labels = list(labels)
+
+            for i in range(len(labels)-1):
+                labels[i+1] = match_labels(labels[i],labels[i+1], iou_threshold=0)
+
+            labels = np.stack(labels, axis=axes.index('T'))
+            
+
             polys=dict(
-                coord= np.concatenate(tuple(np.concatenate([t*np.ones((p['coord'].shape[0],1,p['coord'].shape[2])), p['coord']], axis=1) for t,p in enumerate(polys)),axis=0),
-                points= np.concatenate(tuple(np.concatenate([t*np.ones((p['points'].shape[0],1)), p['points']], axis=1) for t,p in enumerate(polys)),axis=0)
+                coord= np.concatenate(tuple(np.insert(p['coord'], axes.index('T'), t, axis=-2) for t,p in enumerate(polys)),axis=0),
+                points= np.concatenate(tuple(np.insert(p['points'], axes.index('T'), t, axis=-1) for t,p in enumerate(polys)),axis=0)
             )
             pred = labels, polys
             
@@ -257,33 +290,40 @@ def plugin_wrapper():
                                            sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
+
         layers = []
-        if cnn_output:
+        if cnn_output:            
             (labels,polys), cnn_out = pred
             prob, dist = cnn_out[:2]
-            scale = tuple(model.config.grid)
+            scale = tuple(s1*s2 for s1, s2 in zip(image.scale, model.config.grid))
+            # small correction as napari centers object
+            translate = tuple(0.5*(s-1) for s in model.config.grid)
             dist = np.moveaxis(dist, -1,0)
-            layers.append((dist, dict(name='StarDist distances',   scale=(1,)+scale, **lkwargs), 'image'))
-            layers.append((prob, dict(name='StarDist probability', scale=     scale, **lkwargs), 'image'))
+            layers.append((dist, dict(name='StarDist distances',
+                                      scale=(1,)+scale, translate=(0,)+translate,
+                                      **lkwargs), 'image'))
+            layers.append((prob, dict(name='StarDist probability',
+                                      scale=scale, translate=translate,
+                                      **lkwargs), 'image'))
         else:
             labels, polys = pred
 
         if output_type in (Output.Labels.value,Output.Both.value):
-            layers.append((labels, dict(name='StarDist labels', **lkwargs), 'labels'))
-
-            
+            layers.append((labels, dict(name='StarDist labels', scale=image.scale, opacity=.5, **lkwargs), 'labels'))
         if output_type in (Output.Polys.value,Output.Both.value):
             n_objects = len(polys['points'])
             if isinstance(model, StarDist3D):
                 surface = surface_from_polys(polys)
                 layers.append((surface, dict(name='StarDist polyhedra',
                                              contrast_limits=(0,surface[-1].max()),
+                                             scale=image.scale,
                                              colormap=label_colormap(n_objects), **lkwargs), 'surface'))
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys['coord'], -1,-2)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
+                                            scale=image.scale,
                                             edge_width=0.75, edge_color='yellow', face_color=[0,0,0,0], **lkwargs), 'shapes'))
         return layers
 

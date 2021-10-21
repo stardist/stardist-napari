@@ -1,13 +1,13 @@
 import sys
 import numpy as np
+import napari
+
 from stardist.models import Config3D, StarDist3D
 from stardist.data import  test_image_nuclei_2d, test_image_nuclei_3d
 from csbdeep.utils import normalize
 
 
 def show_surface():
-
-    import napari
     
     model = _model3d()
     img, mask = test_image_nuclei_3d(return_mask=True)
@@ -30,9 +30,10 @@ def show_surface():
         viewer = napari.view_image(img) 
         viewer.add_surface(surface) 
 
+    return viewer
+
 
 def show_napari_2d():
-    import napari
     x = test_image_nuclei_2d()
 
     with napari.gui_qt():
@@ -42,31 +43,33 @@ def show_napari_2d():
 
         viewer.window.add_plugin_dock_widget('StarDist')
 
-
 def show_napari_2d_time():
     import napari
     from scipy.ndimage import rotate
-    x = np.stack([rotate(test_image_nuclei_2d(), deg, reshape=False) for deg in np.linspace(0,50,11)])
+    x = np.stack([rotate(test_image_nuclei_2d(), deg, reshape=False, mode='reflect') for deg in np.linspace(0,50,5)], axis=0)
 
     with napari.gui_qt():
         viewer =  napari.Viewer()
 
-        viewer.add_image(x)
+        viewer.add_image(x, scale=(1,1,1))
 
         viewer.window.add_plugin_dock_widget('StarDist')
+    return viewer
+        
 
 def show_napari_3d():
-    import napari
     x = test_image_nuclei_3d()
 
     with napari.gui_qt():
         viewer =  napari.Viewer()
 
-        viewer.add_image(x)
+        viewer.add_image(x, scale=(2,1,1))
 
         viewer.window.add_plugin_dock_widget('StarDist')
         
+    return viewer
+
+        
 if __name__ == '__main__':
 
-    show_napari_2d_time()
-
+    viewer = show_napari_2d_time()
