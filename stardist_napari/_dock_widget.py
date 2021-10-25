@@ -29,7 +29,7 @@ from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
 from typing import List, Union
 from enum import Enum
-from stardist.matching import match_labels
+from .match_labels import match_labels
 
 def surface_from_polys(polys):
     from stardist.geometry import dist_to_coord3D
@@ -201,8 +201,9 @@ def plugin_wrapper():
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
-        # if cnn_output and 'T' in axes:
-        #     raise NotImplementedError('CNN output currently not supported for timeseries!')
+        if output_type in (Output.Polys.value,Output.Both.value) \
+           and 'T' in axes and isinstance(model, StarDist3D):
+            raise NotImplementedError('Polygon output in 3D currently not supported for timelapse')
 
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
@@ -277,11 +278,15 @@ def plugin_wrapper():
             labels = match_labels(labels, iou_threshold=0)
             labels = np.moveaxis(labels, 0, axes.index('T'))
 
-            
-            polys=dict(
-                coord= np.concatenate(tuple(np.insert(p['coord'], axes.index('T'), t, axis=-2) for t,p in enumerate(polys)),axis=0),
-                points= np.concatenate(tuple(np.insert(p['points'], axes.index('T'), t, axis=-1) for t,p in enumerate(polys)),axis=0)
+            if isinstance(model, StarDist3D):
+                # FIXME Polys support for timelapse
+                polys=None
+            else:
+                polys=dict(
+                    coord= np.concatenate(tuple(np.insert(p['coord'], axes.index('T'), t, axis=-2) for t,p in enumerate(polys)),axis=0),
+                    points= np.concatenate(tuple(np.insert(p['points'], axes.index('T'), t, axis=-1) for t,p in enumerate(polys)),axis=0)
             )
+                
             if cnn_output:
                 pred = (labels, polys), cnn_output
             else:
@@ -587,10 +592,12 @@ def plugin_wrapper():
 
         # TODO: guess images axes better...
         axes = None
-        if ndim == 3:
-            axes = 'YXC' if image.rgb else 'TYX'
-        elif ndim == 2:
+        if ndim == 2:
             axes = 'YX'
+        elif ndim==3:
+            axes = 'YXC' if image.rgb else 'TYX'
+        elif ndim == 4:
+            axes = 'ZYXC' if image.rgb else 'TZYX'
         else:
             raise NotImplementedError()
 
