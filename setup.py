@@ -52,7 +52,7 @@ setup(
 
     install_requires=[
         'stardist>=0.7.0',
-        'tensorflow',
+        # 'tensorflow',
         'napari>=0.4.8',
         'magicgui>=0.2.9'
     ],

@@ -20,7 +20,7 @@ def match_labels(x, y, iou_threshold=.2):
     y_labels = set(np.unique(y)) - {0}
 
     # labels that can be used for non-matched regions
-    label_reservoir = list(set(np.arange(1,len(y_labels)+1)) - set(map_dict.keys()))
+    label_reservoir = list(set(np.arange(1,len(y_labels)+1)) - set(map_dict.values()))
 
     for r in regionprops(y):
         m = (y[r.slice] == r.label)
@@ -32,11 +32,6 @@ def match_labels(x, y, iou_threshold=.2):
     return y2
 
 
-if __name__ == '__main__':
-
-    from stardist.data import test_image_nuclei_2d
-
-    x = test_image_nuclei_2d(return_mask=True)[1][:100,:100]
-    y = np.roll(x.copy(),10)
-    y[y==y.max()] = y.max()+1
-    u = match_labels(x,y)
+# def match_labels(x, y, iou_threshold=.2):
+    
+#     return y2

@@ -29,7 +29,7 @@ from napari.qt.threading import thread_worker, create_worker
 from napari.utils.colormaps import label_colormap
 from typing import List
 from enum import Enum
-from .match_labels import match_labels
+from stardist.matching import match_labels
 
 def surface_from_polys(polys):
     from stardist.geometry import dist_to_coord3D
@@ -201,8 +201,8 @@ def plugin_wrapper():
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
-        if cnn_output and 'T' in axes:
-            raise NotImplementedError('CNN output currently not supported for timeseries!')
+        # if cnn_output and 'T' in axes:
+        #     raise NotImplementedError('CNN output currently not supported for timeseries!')
 
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
@@ -216,6 +216,7 @@ def plugin_wrapper():
             else:
                 # normalize channels independently
                 _axis = tuple(i for i in range(x.ndim) if i != axes_dict(axes)['C']) if 'C' in axes else None
+            print(_axis)
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
         if not 'T' in axes and n_tiles is not None and np.prod(n_tiles) > 1:
@@ -260,28 +261,31 @@ def plugin_wrapper():
         if 'T' in axes:
             x_reorder = np.moveaxis(x,axes.index('T'),0)
             axes_reorder = axes.replace('T','')
-            labels, polys = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
+            res = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
                                             prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                             n_tiles=n_tiles,
                                             sparse=(not cnn_output), return_predict=cnn_output)
                                              for _x in progress(x_reorder))))
 
-            
+            if cnn_output:
+                labels, polys = tuple(zip(*res[0]))
+                cnn_output = tuple(np.stack(c, axes.index('T')) for c in tuple(zip(*res[1])))
+            else:
+                labels, polys = res
 
             # match labels in consecutive frames (-> simple IoU tracking)
-            labels = list(labels)
+            labels = match_labels(labels, iou_threshold=0)
+            labels = np.moveaxis(labels, 0, axes.index('T'))
 
-            for i in range(len(labels)-1):
-                labels[i+1] = match_labels(labels[i],labels[i+1], iou_threshold=0)
-
-            labels = np.stack(labels, axis=axes.index('T'))
             
-
             polys=dict(
                 coord= np.concatenate(tuple(np.insert(p['coord'], axes.index('T'), t, axis=-2) for t,p in enumerate(polys)),axis=0),
                 points= np.concatenate(tuple(np.insert(p['points'], axes.index('T'), t, axis=-1) for t,p in enumerate(polys)),axis=0)
             )
-            pred = labels, polys
+            if cnn_output:
+                pred = (labels, polys), cnn_output
+            else:
+                pred = labels, polys
             
         else:
             # TODO: possible to run this in a way that it can be canceled?
@@ -295,12 +299,17 @@ def plugin_wrapper():
         if cnn_output:            
             (labels,polys), cnn_out = pred
             prob, dist = cnn_out[:2]
-            scale = tuple(s1*s2 for s1, s2 in zip(image.scale, model.config.grid))
+            # if timeseries, only scale spatial part...
+            im_scale = tuple(s for i,s in enumerate(image.scale) if not axes[i] in ('T','C'))
+            scale = list(s1*s2 for s1, s2 in zip(im_scale, model.config.grid))
             # small correction as napari centers object
-            translate = tuple(0.5*(s-1) for s in model.config.grid)
-            dist = np.moveaxis(dist, -1,0)
+            translate = list(0.5*(s-1) for s in model.config.grid)
+            if 'T' in axes:
+                scale.insert(axes.index('T'),1)
+                translate.insert(axes.index('T'),0)
+            dist = np.moveaxis(dist, -1,0 )
             layers.append((dist, dict(name='StarDist distances',
-                                      scale=(1,)+scale, translate=(0,)+translate,
+                                      scale=[1]+scale, translate=[0]+translate,
                                       **lkwargs), 'image'))
             layers.append((prob, dict(name='StarDist probability',
                                       scale=scale, translate=translate,
@@ -331,6 +340,7 @@ def plugin_wrapper():
 
     # don't want to load persisted values for these widgets
     plugin.axes.value = ''
+    
     plugin.n_tiles.value = DEFAULTS['n_tiles']
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
 
@@ -579,7 +589,7 @@ def plugin_wrapper():
         # TODO: guess images axes better...
         axes = None
         if ndim == 3:
-            axes = 'YXC' if image.rgb else 'ZYX'
+            axes = 'YXC' if image.rgb else 'TYX'
         elif ndim == 2:
             axes = 'YX'
         else:
@@ -642,7 +652,7 @@ def plugin_wrapper():
             thresholds = model_threshs[model_selected]
             plugin.nms_thresh.value = thresholds['nms']
             plugin.prob_thresh.value = thresholds['prob']
-
+            
 
     # restore defaults
     @change_handler(plugin.defaults_button, init=False)
