@@ -133,7 +133,7 @@ def plugin_wrapper():
         perc_high    = 99.8,
         prob_thresh  = 0.5,
         nms_thresh   = 0.4,
-        output_type  = Output.Labels.value,
+        output_type  = Output.Both.value,
         n_tiles      = 'None',
         cnn_output   = False,
     )
@@ -336,6 +336,7 @@ def plugin_wrapper():
                                              colormap=label_colormap(n_objects), **lkwargs), 'surface'))
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
+                #       seems to be a known issue: https://github.com/napari/napari/issues/2015
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys['coord'], -1,-2)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
@@ -423,6 +424,12 @@ def plugin_wrapper():
             def _image_axes(valid):
                 axes, image, err = getattr(self.args, 'image_axes', (None,None,None))
                 widgets_valid(plugin.axes, valid=(valid or (image is None and (axes is None or len(axes) == 0))))
+                if valid and 'T' in axes and plugin.output_type.value in (Output.Polys.value,Output.Both.value):
+                    plugin.output_type.native.setStyleSheet("background-color: orange")
+                    plugin.output_type.tooltip = 'Displaying many polygons/polyhedra can be very slow.'
+                else:
+                    plugin.output_type.native.setStyleSheet("")
+                    plugin.output_type.tooltip = ''
                 if valid:
                     plugin.axes.tooltip = '\n'.join([f'{a} = {s}' for a,s in zip(axes,get_data(image).shape)])
                     return axes, image
@@ -671,6 +678,10 @@ def plugin_wrapper():
             plugin.nms_thresh.value = thresholds['nms']
             plugin.prob_thresh.value = thresholds['prob']
 
+    # output type changed
+    @change_handler(plugin.output_type, init=False)
+    def _perc_high_change():
+        update._update()
 
     # restore defaults
     @change_handler(plugin.defaults_button, init=False)
