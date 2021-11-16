@@ -690,7 +690,7 @@ def plugin_wrapper():
 
     # output type changed
     @change_handler(plugin.output_type, init=False)
-    def _perc_high_change():
+    def _output_type_change():
         update._update()
 
     # restore defaults
