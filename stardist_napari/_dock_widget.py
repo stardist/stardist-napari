@@ -212,13 +212,23 @@ def plugin_wrapper():
             # TODO: adjust image.scale according to shuffled axes
 
         if norm_image:
-            # TODO: address joint vs. channel-separate normalization properly (let user choose)
-            if 'C' not in axes or image.rgb == True or 'T' in axes:
-                 # normalize channels jointly
-                _axis = None
+            ax = axes_dict(axes)
+            # TODO: address joint vs. channel/time-separate normalization properly (let user choose)
+            #       also needs to be documented somewhere
+            if 'T' in axes:
+                if 'C' not in axes or image.rgb == True:
+                     # normalize channels jointly, frames independently
+                     _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],))
+                else:
+                    # normalize channels independently, frames independently
+                    _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],ax['C']))
             else:
-                # normalize channels independently
-                _axis = tuple(i for i in range(x.ndim) if i != axes_dict(axes)['C']) if 'C' in axes else None
+                if 'C' not in axes or image.rgb == True:
+                     # normalize channels jointly
+                    _axis = None
+                else:
+                    # normalize channels independently
+                    _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
         if 'T' in axes:
@@ -618,7 +628,7 @@ def plugin_wrapper():
         elif ndim == 3:
             axes = 'YXC' if image.rgb else ('ZYX' if ndim_model == 3 else 'TYX')
         elif ndim == 4:
-            axes = 'ZYXC' if image.rgb else 'TZYX'
+            axes = ('ZYXC' if ndim_model == 3 else 'TYXC') if image.rgb else 'TZYX'
         else:
             raise NotImplementedError()
 
