@@ -5,7 +5,6 @@ TODO:
 - run only on field of view
   - https://forum.image.sc/t/how-could-i-get-the-viewed-coordinates/49709
   - https://napari.zulipchat.com/#narrow/stream/212875-general/topic/corner.20pixels.20and.20dims.20displayed
-- normalize image separately per channel or jointly
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
 - try progress bar via @thread_workers
@@ -131,6 +130,7 @@ def plugin_wrapper():
         norm_image   = True,
         perc_low     =  1.0,
         perc_high    = 99.8,
+        norm_axes    = 'ZYX',
         prob_thresh  = 0.5,
         nms_thresh   = 0.4,
         output_type  = Output.Both.value,
@@ -156,6 +156,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
+        norm_axes       = dict(widget_type='LineEdit', label='Normalization Axes', value=''),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
         output_type     = dict(widget_type='ComboBox', label='Output Type', choices=output_choices, value=DEFAULTS['output_type']),
@@ -189,6 +190,7 @@ def plugin_wrapper():
         output_type,
         label_adv,
         n_tiles,
+        norm_axes,
         cnn_output,
         set_thresholds,
         defaults_button,
@@ -212,23 +214,30 @@ def plugin_wrapper():
             # TODO: adjust image.scale according to shuffled axes
 
         if norm_image:
+            axes_norm = axes_check_and_normalize(norm_axes)
+            axes_norm = ''.join(set(axes_norm).intersection(set(axes))) # relevant axes present in input image
+            assert len(axes_norm) > 0
+            # always jointly normalize channels for RGB images
+            if 'C' not in axes_norm and image.rgb == True:
+                axes_norm = axes_norm + 'C'
             ax = axes_dict(axes)
-            # TODO: address joint vs. channel/time-separate normalization properly (let user choose)
-            #       also needs to be documented somewhere
-            if 'T' in axes:
-                if 'C' not in axes or image.rgb == True:
-                     # normalize channels jointly, frames independently
-                     _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],))
-                else:
-                    # normalize channels independently, frames independently
-                    _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],ax['C']))
-            else:
-                if 'C' not in axes or image.rgb == True:
-                     # normalize channels jointly
-                    _axis = None
-                else:
-                    # normalize channels independently
-                    _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
+            _axis = tuple(sorted(ax[a] for a in axes_norm))
+            # # TODO: address joint vs. channel/time-separate normalization properly (let user choose)
+            # #       also needs to be documented somewhere
+            # if 'T' in axes:
+            #     if 'C' not in axes or image.rgb == True:
+            #          # normalize channels jointly, frames independently
+            #          _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],))
+            #     else:
+            #         # normalize channels independently, frames independently
+            #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],ax['C']))
+            # else:
+            #     if 'C' not in axes or image.rgb == True:
+            #          # normalize channels jointly
+            #         _axis = None
+            #     else:
+            #         # normalize channels independently
+            #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
         if 'T' in axes:
@@ -387,7 +396,7 @@ def plugin_wrapper():
         def __init__(self, debug=DEBUG):
             from types import SimpleNamespace
             self.debug = debug
-            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles')})
+            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles', 'norm_axes')})
             self.args  = SimpleNamespace()
             self.viewer = None
 
@@ -398,23 +407,30 @@ def plugin_wrapper():
             self._update()
 
         def help(self, msg):
-            self.viewer.help = msg
+            if self.viewer is not None:
+                self.viewer.help = msg
+            elif len(str(msg)) > 0:
+                print(f"HELP: {msg}")
 
         def _update(self):
 
+            # try to get a hold of the viewer (can be None when plugin starts)
             if self.viewer is None:
                 # TODO: when is this not safe to do and will hang forever?
-                while plugin.viewer.value is None:
-                    time.sleep(0.01)
-                self.viewer = plugin.viewer.value
+                # while plugin.viewer.value is None:
+                #     time.sleep(0.01)
+                if plugin.viewer.value is not None:
+                    self.viewer = plugin.viewer.value
+                    if DEBUG:
+                        print("GOT viewer")
 
-                @self.viewer.layers.events.removed.connect
-                def _layer_removed(event):
-                    layers_remaining = event.source
-                    if len(layers_remaining) == 0:
-                        plugin.image.tooltip = ''
-                        plugin.axes.value = ''
-                        plugin.n_tiles.value = 'None'
+                    @self.viewer.layers.events.removed.connect
+                    def _layer_removed(event):
+                        layers_remaining = event.source
+                        if len(layers_remaining) == 0:
+                            plugin.image.tooltip = ''
+                            plugin.axes.value = ''
+                            plugin.n_tiles.value = 'None'
 
 
             def _model(valid):
@@ -452,6 +468,21 @@ def plugin_wrapper():
                     else:
                         plugin.axes.tooltip = ''
 
+            def _norm_axes(valid):
+                norm_axes, err = getattr(self.args, 'norm_axes', (None,None))
+                widgets_valid(plugin.norm_axes, valid=valid)
+                if valid:
+                    plugin.norm_axes.tooltip = f"Axes to jointly normalize (if present in selected input image). Note: channels of RGB images are always normalized together."
+                    return norm_axes
+                else:
+                    if err is not None:
+                        err = str(err)
+                        err = err[:-1] if err.endswith('.') else err
+                        plugin.norm_axes.tooltip = err
+                        # warn(err) # alternative to tooltip (gui doesn't show up in ipython)
+                    else:
+                        plugin.norm_axes.tooltip = ''
+
             def _n_tiles(valid):
                 n_tiles, image, err = getattr(self.args, 'n_tiles', (None,None,None))
                 widgets_valid(plugin.n_tiles, valid=(valid or image is None))
@@ -474,15 +505,22 @@ def plugin_wrapper():
             all_valid = False
             help_msg = ''
 
-            if self.valid.image_axes and self.valid.n_tiles and self.valid.model:
+            if self.valid.image_axes and self.valid.n_tiles and self.valid.model and self.valid.norm_axes:
                 axes_image, image  = _image_axes(True)
                 axes_model, config = _model(True)
+                axes_norm          = _norm_axes(True)
                 n_tiles = _n_tiles(True)
                 if not _valid_tiles_for_channel(axes_image, n_tiles):
                     # check if image axes and n_tiles are compatible
                     widgets_valid(plugin.n_tiles, valid=False)
                     err = 'number of tiles must be 1 for C axis'
                     plugin.n_tiles.tooltip = err
+                    _restore()
+                elif set(axes_norm).isdisjoint(set(axes_image)):
+                    # check if image axes and normalization axes are compatible
+                    widgets_valid(plugin.norm_axes, valid=False)
+                    err = f"Image axes ({axes_image}) must contain at least one of the normalization axes ({', '.join(axes_norm)})"
+                    plugin.norm_axes.tooltip = err
                     _restore()
                 else:
                     # check if image and model are compatible
@@ -497,6 +535,7 @@ def plugin_wrapper():
                         help_msg = f'Model with axes {axes_model.replace("C", f"C[{ch_model}]")} and image with axes {axes_image.replace("C", f"C[{ch_image}]")} not compatible'
             else:
                 _image_axes(self.valid.image_axes)
+                _norm_axes(self.valid.norm_axes)
                 _n_tiles(self.valid.n_tiles)
                 _model(self.valid.model)
                 _restore()
@@ -521,7 +560,7 @@ def plugin_wrapper():
     # hide percentile selection if normalization turned off
     @change_handler(plugin.norm_image)
     def _norm_image_change(active: bool):
-        widgets_inactive(plugin.perc_low, plugin.perc_high, active=active)
+        widgets_inactive(plugin.perc_low, plugin.perc_high, plugin.norm_axes, active=active)
 
     # ensure that percentile low < percentile high
     @change_handler(plugin.perc_low)
@@ -531,6 +570,20 @@ def plugin_wrapper():
     @change_handler(plugin.perc_high)
     def _perc_high_change():
         plugin.perc_low.value  = min(plugin.perc_low.value, plugin.perc_high.value-0.01)
+
+    @change_handler(plugin.norm_axes)
+    def _norm_axes_change(value: str):
+        if value != value.upper():
+            with plugin.axes.changed.blocked():
+                plugin.norm_axes.value = value.upper()
+        try:
+            axes = axes_check_and_normalize(value, disallowed='S')
+            if len(axes) >= 1:
+                update('norm_axes', True, (axes, None))
+            else:
+                update('norm_axes', False, (axes, 'Cannot be empty'))
+        except ValueError as err:
+            update('norm_axes', False, (value, err))
 
     # -------------------------------------------------------------------------
 
@@ -638,6 +691,7 @@ def plugin_wrapper():
         else:
             plugin.axes.value = axes
         plugin.n_tiles.changed(plugin.n_tiles.value)
+        plugin.norm_axes.changed(plugin.norm_axes.value)
 
 
     # -> triggered by _image_change
