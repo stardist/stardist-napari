@@ -1,6 +1,5 @@
 """
 TODO:
-- support timelapse or channel-wise processing (incl. progress display)
 - ability to cancel running stardist computation
 - run only on field of view
   - https://forum.image.sc/t/how-could-i-get-the-viewed-coordinates/49709
@@ -156,7 +155,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
-        norm_axes       = dict(widget_type='LineEdit', label='Normalization Axes', value=''),
+        norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
         output_type     = dict(widget_type='ComboBox', label='Output Type', choices=output_choices, value=DEFAULTS['output_type']),
