@@ -213,8 +213,9 @@ def plugin_wrapper():
             axes_norm = ''.join(set(axes_norm).intersection(set(axes))) # relevant axes present in input image
             assert len(axes_norm) > 0
             # always jointly normalize channels for RGB images
-            if 'C' not in axes_norm and image.rgb == True:
+            if ('C' in axes and image.rgb == True) and ('C' not in axes_norm):
                 axes_norm = axes_norm + 'C'
+                warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
             _axis = tuple(sorted(ax[a] for a in axes_norm))
             # # TODO: address joint vs. channel/time-separate normalization properly (let user choose)
@@ -235,12 +236,16 @@ def plugin_wrapper():
             #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low,perc_high, axis=_axis)
 
+        # TODO: progress bar (labels) often don't show up. events not processed?
         if 'T' in axes:
             app = use_app()
             t = axes_dict(axes)['T']
             n_frames = x.shape[t]
+            if n_tiles is not None:
+                # remove tiling value for time axis
+                n_tiles = tuple(v for i,v in enumerate(n_tiles) if i != t)
             def progress(it, **kwargs):
-                progress_bar.label = 'Neural Network Prediction'
+                progress_bar.label = 'StarDist Prediction (frames)'
                 progress_bar.range = (0, n_frames)
                 progress_bar.value = 0
                 progress_bar.show()
@@ -254,7 +259,7 @@ def plugin_wrapper():
             n_tiles = tuple(n_tiles)
             app = use_app()
             def progress(it, **kwargs):
-                progress_bar.label = 'Neural Network Prediction'
+                progress_bar.label = 'CNN Prediction (tiles)'
                 progress_bar.range = (0, kwargs.get('total',0))
                 progress_bar.value = 0
                 progress_bar.show()
@@ -267,10 +272,9 @@ def plugin_wrapper():
                 progress_bar.label = 'NMS Postprocessing'
                 progress_bar.range = (0, 0)
                 app.process_events()
-                # TODO: progress bar doesn't update during NMS since events not processed?
         else:
             progress = False
-            progress_bar.label = 'Neural Network Prediction'
+            progress_bar.label = 'StarDist Prediction'
             progress_bar.range = (0, 0)
             progress_bar.show()
             use_app().process_events()
@@ -488,9 +492,9 @@ def plugin_wrapper():
                     msg = str(err) if err is not None else ''
                     plugin.n_tiles.tooltip = msg
 
-            def _valid_tiles_for_channel(axes_image, n_tiles):
-                if n_tiles is not None and 'C' in axes_image:
-                    return n_tiles[axes_dict(axes_image)['C']] == 1
+            def _no_tiling_for_axis(axes_image, n_tiles, axis):
+                if n_tiles is not None and axis in axes_image:
+                    return n_tiles[axes_dict(axes_image)[axis]] == 1
                 return True
 
             def _restore():
@@ -505,10 +509,16 @@ def plugin_wrapper():
                 axes_model, config = _model(True)
                 axes_norm          = _norm_axes(True)
                 n_tiles = _n_tiles(True)
-                if not _valid_tiles_for_channel(axes_image, n_tiles):
+                if not _no_tiling_for_axis(axes_image, n_tiles, 'C'):
                     # check if image axes and n_tiles are compatible
                     widgets_valid(plugin.n_tiles, valid=False)
                     err = 'number of tiles must be 1 for C axis'
+                    plugin.n_tiles.tooltip = err
+                    _restore()
+                elif not _no_tiling_for_axis(axes_image, n_tiles, 'T'):
+                    # check if image axes and n_tiles are compatible
+                    widgets_valid(plugin.n_tiles, valid=False)
+                    err = 'number of tiles must be 1 for T axis'
                     plugin.n_tiles.tooltip = err
                     _restore()
                 elif set(axes_norm).isdisjoint(set(axes_image)):
