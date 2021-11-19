@@ -27,8 +27,27 @@ def show_napari_2d():
     viewer.add_image(x)
     viewer.window.add_plugin_dock_widget('StarDist')
 
+def show_napari_2d_time():
+    import napari
+    from scipy.ndimage import rotate
+    x = np.stack([rotate(test_image_nuclei_2d(), deg, reshape=False, mode='reflect') for deg in np.linspace(0,50,5)], axis=0)
+
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(1,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
     return viewer
-        
+
+def show_napari_3d_time():
+    import napari
+    x = test_image_nuclei_3d()
+    x = np.stack([np.roll(x, n) for n in np.arange(0,30,10)], axis=0)
+
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(1,1,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
+    return viewer
+
+
 
 def show_napari_3d():
     x = test_image_nuclei_3d()
@@ -36,18 +55,14 @@ def show_napari_3d():
     viewer.add_image(x)
     viewer.window.add_plugin_dock_widget('StarDist')
 
-    with napari.gui_qt():
-        viewer =  napari.Viewer()
-
-        viewer.add_image(x, scale=(2,1,1))
-
-        viewer.window.add_plugin_dock_widget('StarDist')
-        
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(2,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
     return viewer
 
-        
-if __name__ == '__main__':
 
-    viewer = show_napari_2d()
-    if 'run' in sys.argv:
-        napari.run()
+if __name__ == '__main__':
+    viewer = show_napari_2d_time()
+    # viewer = show_napari_3d_time()
+    # if 'run' in sys.argv:
+    napari.run()
