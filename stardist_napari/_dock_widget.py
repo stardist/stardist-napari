@@ -204,10 +204,6 @@ def plugin_wrapper():
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
-        if output_type in (Output.Polys.value,Output.Both.value) \
-           and 'T' in axes and isinstance(model, StarDist3D):
-            raise NotImplementedError('Polyhedra output currently not supported for 3D timelapse data')
-
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
             # TODO: adjust image.scale according to shuffled axes
@@ -299,13 +295,13 @@ def plugin_wrapper():
             labels = np.moveaxis(labels, 0, t)
 
             if isinstance(model, StarDist3D):
-                # FIXME Polys support for timelapse
+                # TODO poly output support for 3D timelapse
                 polys = None
             else:
                 polys = dict(
                     coord =  np.concatenate(tuple(np.insert(p['coord'],  t, _t, axis=-2) for _t,p in enumerate(polys)),axis=0),
                     points = np.concatenate(tuple(np.insert(p['points'], t, _t, axis=-1) for _t,p in enumerate(polys)),axis=0)
-            )
+                )
 
             if cnn_output:
                 pred = (labels, polys), cnn_output
@@ -520,6 +516,11 @@ def plugin_wrapper():
                     widgets_valid(plugin.norm_axes, valid=False)
                     err = f"Image axes ({axes_image}) must contain at least one of the normalization axes ({', '.join(axes_norm)})"
                     plugin.norm_axes.tooltip = err
+                    _restore()
+                elif 'T' in axes_image and config['n_dim'] == 3 and plugin.output_type.value in (Output.Polys.value,Output.Both.value):
+                    # not supported
+                    widgets_valid(plugin.output_type, valid=False)
+                    plugin.output_type.tooltip = 'Polyhedra output currently not supported for 3D timelapse data'
                     _restore()
                 else:
                     # check if image and model are compatible
