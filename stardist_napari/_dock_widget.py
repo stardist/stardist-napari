@@ -120,21 +120,28 @@ def plugin_wrapper():
         Both   = 'Both'
     output_choices = [Output.Labels.value, Output.Polys.value, Output.Both.value]
 
+    class TimelapseLabels(Enum):
+        Match    = 'Match to previous frame (via overlap)'
+        Unique   = 'Unique through time'
+        Separate = 'Separate per frame (no processing)'
+    timelapse_opts = [TimelapseLabels.Match.value, TimelapseLabels.Unique.value, TimelapseLabels.Separate.value]
+
     # -------------------------------------------------------------------------
 
     DEFAULTS = dict (
-        model_type   = StarDist2D,
-        model2d      = models2d[0][1],
-        model3d      = models3d[0][1],
-        norm_image   = True,
-        perc_low     =  1.0,
-        perc_high    = 99.8,
-        norm_axes    = 'ZYX',
-        prob_thresh  = 0.5,
-        nms_thresh   = 0.4,
-        output_type  = Output.Both.value,
-        n_tiles      = 'None',
-        cnn_output   = False,
+        model_type     = StarDist2D,
+        model2d        = models2d[0][1],
+        model3d        = models3d[0][1],
+        norm_image     = True,
+        perc_low       =  1.0,
+        perc_high      = 99.8,
+        norm_axes      = 'ZYX',
+        prob_thresh    = 0.5,
+        nms_thresh     = 0.4,
+        output_type    = Output.Both.value,
+        n_tiles        = 'None',
+        timelapse_opts = TimelapseLabels.Unique.value,
+        cnn_output     = False,
     )
 
     # -------------------------------------------------------------------------
@@ -161,6 +168,7 @@ def plugin_wrapper():
         output_type     = dict(widget_type='ComboBox', label='Output Type', choices=output_choices, value=DEFAULTS['output_type']),
         label_adv       = dict(widget_type='Label', label='<br><b>Advanced Options:</b>'),
         n_tiles         = dict(widget_type='LiteralEvalLineEdit', label='Number of Tiles', value=DEFAULTS['n_tiles']),
+        timelapse_opts  = dict(widget_type='ComboBox', label='Time-lapse Labels ', choices=timelapse_opts, value=DEFAULTS['timelapse_opts']),
         cnn_output      = dict(widget_type='CheckBox', text='Show CNN Output', value=DEFAULTS['cnn_output']),
         set_thresholds  = dict(widget_type='PushButton', text='Set optimized postprocessing thresholds (for selected model)'),
         defaults_button = dict(widget_type='PushButton', text='Restore Defaults'),
@@ -190,6 +198,7 @@ def plugin_wrapper():
         label_adv,
         n_tiles,
         norm_axes,
+        timelapse_opts,
         cnn_output,
         set_thresholds,
         defaults_button,
@@ -294,8 +303,23 @@ def plugin_wrapper():
             else:
                 labels, polys = res
 
-            # match labels in consecutive frames (-> simple IoU tracking)
-            labels = match_labels(labels, iou_threshold=0)
+            labels = np.asarray(labels)
+
+            if len(polys) > 1:
+                if timelapse_opts == TimelapseLabels.Match.value:
+                    # match labels in consecutive frames (-> simple IoU tracking)
+                    labels = match_labels(labels, iou_threshold=0)
+                elif timelapse_opts == TimelapseLabels.Unique.value:
+                    # make label ids unique (shift by offset)
+                    offsets = np.cumsum([len(p['points']) for p in polys])
+                    for y,off in zip(labels[1:],offsets):
+                        y[y>0] += off
+                elif timelapse_opts == TimelapseLabels.Separate.value:
+                    # each frame processed separately (nothing to do)
+                    pass
+                else:
+                    raise NotImplementedError(f"unknown option '{timelapse_opts}' for time-lapse labels")
+
             labels = np.moveaxis(labels, 0, t)
 
             if isinstance(model, StarDist3D):
@@ -527,7 +551,7 @@ def plugin_wrapper():
                     err = f"Image axes ({axes_image}) must contain at least one of the normalization axes ({', '.join(axes_norm)})"
                     plugin.norm_axes.tooltip = err
                     _restore()
-                elif 'T' in axes_image and config['n_dim'] == 3 and plugin.output_type.value in (Output.Polys.value,Output.Both.value):
+                elif 'T' in axes_image and config.get('n_dim') == 3 and plugin.output_type.value in (Output.Polys.value,Output.Both.value):
                     # not supported
                     widgets_valid(plugin.output_type, valid=False)
                     plugin.output_type.tooltip = 'Polyhedra output currently not supported for 3D timelapse data'
@@ -711,12 +735,15 @@ def plugin_wrapper():
             with plugin.axes.changed.blocked():
                 plugin.axes.value = value.upper()
         image = plugin.image.value
+        axes = ''
         try:
             image is not None or _raise(ValueError("no image selected"))
             axes = axes_check_and_normalize(value, length=get_data(image).ndim, disallowed='S')
             update('image_axes', True, (axes, image, None))
         except ValueError as err:
             update('image_axes', False, (value, image, err))
+        finally:
+            widgets_inactive(plugin.timelapse_opts, active=('T' in axes))
 
 
     # -> triggered by _image_change
@@ -769,6 +796,7 @@ def plugin_wrapper():
     plugin.image.native.setMinimumWidth(240)
     plugin.model2d.native.setMinimumWidth(240)
     plugin.model3d.native.setMinimumWidth(240)
+    plugin.timelapse_opts.native.setMinimumWidth(240)
 
     plugin.label_head.native.setOpenExternalLinks(True)
     # make reset button smaller
