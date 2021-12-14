@@ -24,6 +24,7 @@ from warnings import warn
 
 import napari
 from napari.qt.threading import thread_worker
+from qtpy.QtWidgets import QSizePolicy
 from napari.utils.colormaps import label_colormap
 from typing import List, Union
 from enum import Enum
@@ -395,7 +396,7 @@ def plugin_wrapper():
 
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
     for w in (plugin.label_head, plugin.label_nn, plugin.label_nms, plugin.label_adv):
-        w.native.setSizePolicy(1|2, 0)
+        w.native.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
     # -------------------------------------------------------------------------
 
