@@ -289,9 +289,14 @@ def plugin_wrapper():
             progress_bar.show()
             use_app().process_events()
 
+        # semantic output axes of predictions
+        assert model._axes_out[-1] == 'C'
+        axes_out = list(model._axes_out[:-1])
+
         if 'T' in axes:
             x_reorder = np.moveaxis(x, t, 0)
             axes_reorder = axes.replace('T','')
+            axes_out.insert(t, 'T')
             res = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
                                             prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                             n_tiles=n_tiles,
@@ -344,38 +349,41 @@ def plugin_wrapper():
                                            sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
+        # determine scale for output axes
+        scale_in_dict = dict(zip(axes, image.scale))
+        scale_out = [scale_in_dict.get(a,1.0) for a in axes_out]
 
         layers = []
         if cnn_output:
             (labels,polys), cnn_out = pred
             prob, dist = cnn_out[:2]
-            # if timeseries, only scale spatial part...
-            im_scale = tuple(s for i,s in enumerate(image.scale) if not axes[i] in ('T','C'))
-            scale = list(s1*s2 for s1, s2 in zip(im_scale, model.config.grid))
-            # small correction as napari centers object
-            translate = list(0.5*(s-1) for s in model.config.grid)
-            if 'T' in axes:
-                scale.insert(t,1)
-                translate.insert(t,0)
             dist = np.moveaxis(dist, -1,0)
+
+            assert len(model.config.grid) == len(model.config.axes)-1
+            grid_dict = dict(zip(model.config.axes.replace('C',''),model.config.grid))
+            # scale output axes to match input axes
+            _scale = [s*grid_dict.get(a,1) for a,s in zip(axes_out, scale_out)]
+            # small translation correction if grid > 1 (since napari centers objects)
+            _translate = [0.5*(grid_dict.get(a,1)-1) for a in axes_out]
+
             layers.append((dist, dict(name='StarDist distances',
-                                      scale=[1]+scale, translate=[0]+translate,
+                                      scale=[1]+_scale, translate=[0]+_translate,
                                       **lkwargs), 'image'))
             layers.append((prob, dict(name='StarDist probability',
-                                      scale=scale, translate=translate,
+                                      scale=_scale, translate=_translate,
                                       **lkwargs), 'image'))
         else:
             labels, polys = pred
 
         if output_type in (Output.Labels.value,Output.Both.value):
-            layers.append((labels, dict(name='StarDist labels', scale=image.scale, opacity=.5, **lkwargs), 'labels'))
+            layers.append((labels, dict(name='StarDist labels', scale=scale_out, opacity=.5, **lkwargs), 'labels'))
         if output_type in (Output.Polys.value,Output.Both.value):
             n_objects = len(polys['points'])
             if isinstance(model, StarDist3D):
                 surface = surface_from_polys(polys)
                 layers.append((surface, dict(name='StarDist polyhedra',
                                              contrast_limits=(0,surface[-1].max()),
-                                             scale=image.scale,
+                                             scale=scale_out,
                                              colormap=label_colormap(n_objects), **lkwargs), 'surface'))
             else:
                 # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
@@ -383,7 +391,7 @@ def plugin_wrapper():
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys['coord'], -1,-2)
                 layers.append((shapes, dict(name='StarDist polygons', shape_type='polygon',
-                                            scale=image.scale,
+                                            scale=scale_out,
                                             edge_width=0.75, edge_color='yellow', face_color=[0,0,0,0], **lkwargs), 'shapes'))
         return layers
 
