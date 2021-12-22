@@ -3,7 +3,13 @@
 labels:
   ontology: EDAM-BIOIMAGING:alpha06
   terms:
+  - Medical imaging
+  - Microscopy
   - 2D image
   - 3D image
+  - Image time series
+  - Object detection
   - Cell segmentation
   - Model-based segmentation
+  - Convolutional neural network
+  - Supervised learning
