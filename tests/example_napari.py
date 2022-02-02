@@ -1,31 +1,24 @@
 import sys
 import numpy as np
+import napari
+
 from stardist.models import Config3D, StarDist3D
 from stardist.data import  test_image_nuclei_2d, test_image_nuclei_3d
 from csbdeep.utils import normalize
 import napari
+from stardist_napari._dock_widget import surface_from_polys
 
+def show_surface():
+    model = _model3d()
+    img, mask = test_image_nuclei_3d(return_mask=True)
+    x = normalize(img, 1, 99.8)
+    labels, polys = model.predict_instances(x)
+    surface = surface_from_polys(polys)
+    # add the surface
+    viewer = napari.view_image(img)
+    viewer.add_surface(surface)
 
-# def show_surface():
-#     model = StarDist3D.from_pretrained('3D_demo')
-#     img, mask = test_image_nuclei_3d(return_mask=True)
-#     x = normalize(img, 1, 99.8)
-#     labels, polys = model.predict_instances(x)
-
-#     def surface_from_polys(polys):
-#         from stardist.geometry import dist_to_coord3D
-#         faces = polys["rays_faces"]
-#         coord = dist_to_coord3D(polys["dist"], polys["points"], polys["rays_vertices"])
-#         faces = np.concatenate([faces+coord.shape[1]*i for i in np.arange(len(coord))])
-#         vertices = np.concatenate(coord, axis = 0)
-#         values = np.concatenate([np.random.rand()*np.ones(len(c)) for c in coord])
-#         return (vertices,faces,values)
-
-#     surface = surface_from_polys(polys)
-
-#     # add the surface
-#     viewer = napari.view_image(img)
-#     viewer.add_surface(surface)
+    return viewer
 
 
 def show_napari_2d():
@@ -34,14 +27,42 @@ def show_napari_2d():
     viewer.add_image(x)
     viewer.window.add_plugin_dock_widget('StarDist')
 
+def show_napari_2d_time():
+    import napari
+    from scipy.ndimage import rotate
+    x = np.stack([rotate(test_image_nuclei_2d(), deg, reshape=False, mode='reflect') for deg in np.linspace(0,50,5)], axis=0)
+
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(1,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
+    return viewer
+
+def show_napari_3d_time():
+    import napari
+    x = test_image_nuclei_3d()
+    x = np.stack([np.roll(x, n) for n in np.arange(0,30,10)], axis=0)
+
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(1,1,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
+    return viewer
+
+
+
 def show_napari_3d():
     x = test_image_nuclei_3d()
     viewer =  napari.Viewer()
     viewer.add_image(x)
     viewer.window.add_plugin_dock_widget('StarDist')
 
-if __name__ == '__main__':
+    viewer =  napari.Viewer()
+    viewer.add_image(x, scale=(2,1,1))
+    viewer.window.add_plugin_dock_widget('StarDist')
+    return viewer
 
-    show_napari_2d()
-    if 'run' in sys.argv:
-        napari.run()
+
+if __name__ == '__main__':
+    viewer = show_napari_2d_time()
+    # viewer = show_napari_3d_time()
+    # if 'run' in sys.argv:
+    napari.run()
