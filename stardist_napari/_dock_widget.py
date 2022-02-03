@@ -9,7 +9,7 @@ TODO:
 - try progress bar via @thread_workers
 """
 
-from napari_plugin_engine import napari_hook_implementation
+# from napari_plugin_engine import napari_hook_implementation
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.events import Event, Signal
@@ -822,22 +822,6 @@ def plugin_wrapper():
 
 
 
-@napari_hook_implementation
-def napari_experimental_provide_dock_widget():
-    return plugin_wrapper, dict(name='StarDist', add_vertical_stretch=False)
-
-
-
-@napari_hook_implementation
-def napari_provide_sample_data():
-    from stardist import data
-    return {
-        'test_image_nuclei_2d': {
-            'data': lambda: [(data.test_image_nuclei_2d(), {'name': 'nuclei2d'})],
-            'display_name': 'Nuclei (2D)',
-        },
-        'test_image_nuclei_3d': {
-            'data': lambda: [(data.test_image_nuclei_3d(), {'name': 'nuclei3d'})],
-            'display_name': 'Nuclei (3D)',
-        },
-    }
+# @napari_hook_implementation
+# def napari_experimental_provide_dock_widget():
+#     return plugin_wrapper, dict(name='StarDist', add_vertical_stretch=False)
