@@ -31,9 +31,9 @@ setup(
     packages=find_packages(),
     python_requires='>=3.7',
 
-    package_data={'stardist_napari': [ 'resources/*' ]},
+    package_data={'stardist_napari': [ 'resources/*', 'napari.yaml' ]},
 
-    entry_points={'napari.plugin': 'StarDist = stardist_napari'},
+    entry_points={'napari.manifest': ['stardist-napari = stardist_napari:napari.yaml']},
 
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -53,7 +53,7 @@ setup(
     install_requires=[
         'stardist>=0.7.0',
         'tensorflow',
-        'napari>=0.4.9',
+        'napari>=0.4.13',
         'magicgui>=0.3.0'
     ],
 )
