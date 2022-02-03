@@ -134,6 +134,7 @@ def plugin_wrapper():
         model2d        = models2d[0][1],
         model3d        = models3d[0][1],
         norm_image     = True,
+        input_scale    = None,
         perc_low       =  1.0,
         perc_high      = 99.8,
         norm_axes      = 'ZYX',
@@ -163,6 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
+        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor ',              min=.1, max=4, step=0.1,  value=1.),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -192,6 +194,7 @@ def plugin_wrapper():
         norm_image,
         perc_low,
         perc_high,
+        input_scale,
         label_nms,
         prob_thresh,
         nms_thresh,
@@ -210,6 +213,12 @@ def plugin_wrapper():
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
 
+        if input_scale==1.0:
+            input_scale = None 
+
+        print(input_scale)
+
+        
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
@@ -300,6 +309,7 @@ def plugin_wrapper():
             res = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
                                             prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                             n_tiles=n_tiles,
+                                            scale=input_scale,
                                             sparse=(not cnn_output), return_predict=cnn_output)
                                              for _x in progress(x_reorder))))
 
@@ -346,6 +356,7 @@ def plugin_wrapper():
             # TODO: possible to run this in a way that it can be canceled?
             pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                            n_tiles=n_tiles, show_tile_progress=progress,
+                                           scale=input_scale,
                                            sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
@@ -402,6 +413,7 @@ def plugin_wrapper():
     plugin.n_tiles.value = DEFAULTS['n_tiles']
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
 
+    plugin.input_scale.tooltip = 'Scales input by this factor (e.g. set to values <1 in the case of oversegmentation)'
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
     for w in (plugin.label_head, plugin.label_nn, plugin.label_nms, plugin.label_adv):
         w.native.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)

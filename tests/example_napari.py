@@ -62,7 +62,8 @@ def show_napari_3d():
 
 
 if __name__ == '__main__':
-    viewer = show_napari_2d_time()
+    viewer = show_napari_2d()
+    # viewer = show_napari_2d_time()
     # viewer = show_napari_3d_time()
     # if 'run' in sys.argv:
     napari.run()
