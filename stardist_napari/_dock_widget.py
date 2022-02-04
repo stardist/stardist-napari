@@ -134,7 +134,7 @@ def plugin_wrapper():
         model2d        = models2d[0][1],
         model3d        = models3d[0][1],
         norm_image     = True,
-        input_scale    = None,
+        input_scale    = 1.0,
         perc_low       =  1.0,
         perc_high      = 99.8,
         norm_axes      = 'ZYX',
@@ -164,7 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
-        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor ',              min=.1, max=4, step=0.1,  value=1.),
+        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor ',       min=.1,  max=4,     step=0.1,  value=DEFAULTS['input_scale']),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -813,6 +813,7 @@ def plugin_wrapper():
 
     # -------------------------------------------------------------------------
 
+    
     # allow some widgets to shrink because their size depends on user input
     plugin.image.native.setMinimumWidth(240)
     plugin.model2d.native.setMinimumWidth(240)
@@ -826,8 +827,14 @@ def plugin_wrapper():
     # plugin.model_axes.native.setReadOnly(True)
     plugin.model_axes.enabled = False
 
-    # push 'call_button' and 'progress_bar' to bottom
+    # reduce vertical spacing and fontsize
     layout = plugin.native.layout()
+    layout.setSpacing(6)
+    # for i in range(len(layout)) :
+    #     w = layout.itemAt(i).widget()
+    #     w.setStyleSheet("""QWidget {font-size:11px;}""")
+
+    # push 'call_button' and 'progress_bar' to bottom
     layout.insertStretch(layout.count()-2)
 
     return plugin
