@@ -164,7 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
-        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor ',       min=.1,  max=4,     step=0.1,  value=DEFAULTS['input_scale']),
+        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor',        min=.1,  max=4,     step=0.1,  value=DEFAULTS['input_scale']),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -213,11 +213,10 @@ def plugin_wrapper():
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
 
+        
         if input_scale==1.0:
+            # if None, scaling will be disabled in predict_instances
             input_scale = None 
-
-        print(input_scale)
-
         
         lkwargs = {}
         x = get_data(image)
