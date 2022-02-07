@@ -841,7 +841,8 @@ def plugin_wrapper():
                 raise ValueError(f'must be a tuple/list of length {len(shape)}')
  
             if not all(isinstance(t,numbers.Number) and t > 0 for t in value):
-                    raise ValueError(f'each value must be an float >= 0')
+                raise ValueError(f'each value must be an float >= 0')
+                
             update('input_scale', True, (value, image, None))
         except (ValueError, SyntaxError) as err:
             update('input_scale', False, (None, image, err))
