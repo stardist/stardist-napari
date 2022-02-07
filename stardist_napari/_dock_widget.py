@@ -445,7 +445,8 @@ def plugin_wrapper():
 
         To add a new plugin field:
 
-            * add update() call inside the plugin fields change handler 
+            * put single field validation logic inside the plugin fields change handler 
+            * add update() call inside change handler 
             * add _param() inner function inside Updater._update() and call it therein
 
 
@@ -829,13 +830,18 @@ def plugin_wrapper():
                 update('input_scale', True, (None, image, None))
                 return
             shape = get_data(image).shape
+
+            if isinstance(value,numbers.Number):
+                value = tuple(value if a in "XYZ" else 1 for a in plugin.axes.value)
+            
             try:
                 value = tuple(value)
                 len(value) == len(shape) or _raise(TypeError())
             except TypeError:
                 raise ValueError(f'must be a tuple/list of length {len(shape)}')
+ 
             if not all(isinstance(t,numbers.Number) and t > 0 for t in value):
-                raise ValueError(f'each value must be an float >= 0')
+                    raise ValueError(f'each value must be an float >= 0')
             update('input_scale', True, (value, image, None))
         except (ValueError, SyntaxError) as err:
             update('input_scale', False, (None, image, err))
