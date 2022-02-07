@@ -134,7 +134,7 @@ def plugin_wrapper():
         model2d        = models2d[0][1],
         model3d        = models3d[0][1],
         norm_image     = True,
-        input_scale    = 1.0,
+        input_scale    = 'None',
         perc_low       =  1.0,
         perc_high      = 99.8,
         norm_axes      = 'ZYX',
@@ -164,7 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
-        input_scale     = dict(widget_type='FloatSpinBox', label='Image scaling factor',        min=.1,  max=4,     step=0.1,  value=DEFAULTS['input_scale']),
+        input_scale     = dict(widget_type='LiteralEvalLineEdit', label='Image scaling factor', value=DEFAULTS['input_scale']),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -212,11 +212,11 @@ def plugin_wrapper():
         model = get_model(*model_selected)
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
-
         
-        if input_scale==1.0:
-            # if None, scaling will be disabled in predict_instances
-            input_scale = None 
+        if input_scale is None:
+            input_scale = tuple(1 for a in axes)
+
+        print(f'scaling by {input_scale}')
         
         lkwargs = {}
         x = get_data(image)
@@ -410,6 +410,7 @@ def plugin_wrapper():
     # don't want to load persisted values for these widgets
     plugin.axes.value = ''
     plugin.n_tiles.value = DEFAULTS['n_tiles']
+    plugin.input_scale.value = DEFAULTS['input_scale']
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
 
     plugin.input_scale.tooltip = 'Scales input by this factor (e.g. set to values <1 in the case of oversegmentation)'
@@ -439,7 +440,7 @@ def plugin_wrapper():
         def __init__(self, debug=DEBUG):
             from types import SimpleNamespace
             self.debug = debug
-            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles', 'norm_axes')})
+            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles', 'norm_axes', 'input_scale')})
             self.args  = SimpleNamespace()
             self.viewer = None
 
@@ -474,6 +475,8 @@ def plugin_wrapper():
                             plugin.image.tooltip = ''
                             plugin.axes.value = ''
                             plugin.n_tiles.value = 'None'
+                            plugin.input_scale.value = 'None'
+
 
 
             def _model(valid):
@@ -535,11 +538,21 @@ def plugin_wrapper():
                 else:
                     msg = str(err) if err is not None else ''
                     plugin.n_tiles.tooltip = msg
-
+            
             def _no_tiling_for_axis(axes_image, n_tiles, axis):
                 if n_tiles is not None and axis in axes_image:
                     return n_tiles[axes_dict(axes_image)[axis]] == 1
                 return True
+
+            def _input_scale(valid):
+                input_scale, image, err = getattr(self.args, 'input_scale', (None,None,None))
+                widgets_valid(plugin.input_scale, valid=(valid or image is None))
+                if valid:
+                    plugin.input_scale.tooltip = 'no scaling' if input_scale is None else '\n'.join([f'{t}: {s}' for t,s in zip(input_scale,get_data(image).shape)])
+                    return input_scale
+                else:
+                    msg = str(err) if err is not None else ''
+                    plugin.input_scale.tooltip = msg
 
             def _restore():
                 widgets_valid(plugin.image, valid=plugin.image.value is not None)
@@ -548,11 +561,13 @@ def plugin_wrapper():
             all_valid = False
             help_msg = ''
 
-            if self.valid.image_axes and self.valid.n_tiles and self.valid.model and self.valid.norm_axes:
+            if self.valid.image_axes and self.valid.n_tiles and self.valid.model and self.valid.norm_axes and self.valid.input_scale:
                 axes_image, image  = _image_axes(True)
                 axes_model, config = _model(True)
                 axes_norm          = _norm_axes(True)
-                n_tiles = _n_tiles(True)
+                n_tiles            = _n_tiles(True)
+                input_scale        = _input_scale(True) 
+
                 if not _no_tiling_for_axis(axes_image, n_tiles, 'C'):
                     # check if image axes and n_tiles are compatible
                     widgets_valid(plugin.n_tiles, valid=False)
@@ -591,6 +606,7 @@ def plugin_wrapper():
                 _image_axes(self.valid.image_axes)
                 _norm_axes(self.valid.norm_axes)
                 _n_tiles(self.valid.n_tiles)
+                _input_scale(self.valid.input_scale)
                 _model(self.valid.model)
                 _restore()
 
@@ -788,6 +804,26 @@ def plugin_wrapper():
         except (ValueError, SyntaxError) as err:
             update('n_tiles', False, (None, image, err))
 
+    @change_handler(plugin.input_scale, init=False)
+    def _input_scale_change():
+        image = plugin.image.value
+        try:
+            image is not None or _raise(ValueError("no image selected"))
+            value = plugin.input_scale.get_value()
+            if value is None:
+                update('input_scale', True, (None, image, None))
+                return
+            shape = get_data(image).shape
+            try:
+                value = tuple(value)
+                len(value) == len(shape) or _raise(TypeError())
+            except TypeError:
+                raise ValueError(f'must be a tuple/list of length {len(shape)}')
+            if not all(isinstance(t,float) and t > 0 for t in value):
+                raise ValueError(f'each value must be an float >= 0')
+            update('input_scale', True, (value, image, None))
+        except (ValueError, SyntaxError) as err:
+            update('input_scale', False, (None, image, err))
 
     # -------------------------------------------------------------------------
 
