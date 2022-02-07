@@ -10,6 +10,7 @@ TODO:
 """
 
 # from napari_plugin_engine import napari_hook_implementation
+import numbers
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.events import Event, Signal
@@ -437,6 +438,18 @@ def plugin_wrapper():
 
 
     class Updater:
+        """  Class that allows for joint validation of different parameters
+
+        update = Updater() 
+        update('param', valid=True, args=some_value)
+
+        To add a new plugin field:
+
+            * add update() call inside the plugin fields change handler 
+            * add _param() inner function inside Updater._update() and call it therein
+
+
+        """
         def __init__(self, debug=DEBUG):
             from types import SimpleNamespace
             self.debug = debug
@@ -760,7 +773,9 @@ def plugin_wrapper():
             plugin.axes.changed(axes)
         else:
             plugin.axes.value = axes
+
         plugin.n_tiles.changed(plugin.n_tiles.value)
+        plugin.input_scale.changed(plugin.input_scale.value)
         plugin.norm_axes.changed(plugin.norm_axes.value)
 
 
@@ -819,7 +834,7 @@ def plugin_wrapper():
                 len(value) == len(shape) or _raise(TypeError())
             except TypeError:
                 raise ValueError(f'must be a tuple/list of length {len(shape)}')
-            if not all(isinstance(t,float) and t > 0 for t in value):
+            if not all(isinstance(t,numbers.Number) and t > 0 for t in value):
                 raise ValueError(f'each value must be an float >= 0')
             update('input_scale', True, (value, image, None))
         except (ValueError, SyntaxError) as err:
