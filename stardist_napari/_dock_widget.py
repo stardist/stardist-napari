@@ -369,6 +369,7 @@ def plugin_wrapper():
         layers = []
         if cnn_output:
             (labels,polys), cnn_out = pred
+                
             prob, dist = cnn_out[:2]
             dist = np.moveaxis(dist, -1,0)
 
@@ -379,12 +380,20 @@ def plugin_wrapper():
             # small translation correction if grid > 1 (since napari centers objects)
             _translate = [0.5*(grid_dict.get(a,1)-1) for a in axes_out]
 
+            
             layers.append((dist, dict(name='StarDist distances',
                                       scale=[1]+_scale, translate=[0]+_translate,
                                       **lkwargs), 'image'))
             layers.append((prob, dict(name='StarDist probability',
                                       scale=_scale, translate=_translate,
                                       **lkwargs), 'image'))
+
+            if model._is_multiclass():
+                class_output = np.moveaxis(cnn_out[-1], -1, 0)
+                layers.append((class_output, dict(name='StarDist class probabilities',
+                                      scale=_scale, translate=_translate,
+                                      **lkwargs), 'image'))
+                                      
         else:
             labels, polys = pred
 
