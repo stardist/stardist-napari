@@ -209,11 +209,7 @@ def plugin_wrapper():
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
-        model = get_model(*model_selected)
-        if model._is_multiclass():
-            warn("multi-class mode not supported yet, ignoring classification output")
-        
-        
+        model = get_model(*model_selected)     
         
         lkwargs = {}
         x = get_data(image)
