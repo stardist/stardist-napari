@@ -9,7 +9,6 @@ TODO:
 - try progress bar via @thread_workers
 """
 
-# from napari_plugin_engine import napari_hook_implementation
 import numbers
 from magicgui import magicgui
 from magicgui import widgets as mw
@@ -903,9 +902,3 @@ def plugin_wrapper():
     layout.insertStretch(layout.count()-2)
 
     return plugin
-
-
-
-# @napari_hook_implementation
-# def napari_experimental_provide_dock_widget():
-#     return plugin_wrapper, dict(name='StarDist', add_vertical_stretch=False)
