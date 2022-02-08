@@ -214,14 +214,17 @@ def plugin_wrapper():
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
         
-        if input_scale is None:
-            input_scale = tuple(1 for a in axes)
-
-        print(f'scaling by {input_scale}')
+        
         
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        
+        if input_scale is None:
+            input_scale = tuple(1 for a in axes if not a in ('T',))
+        
+        print(f'scaling by {input_scale}')
 
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
@@ -831,14 +834,19 @@ def plugin_wrapper():
                 return
             shape = get_data(image).shape
 
+            # axes over which prediction happens (excluding 'T' etc)
+            pred_axes = tuple(a for a in plugin.axes.value if a in 'XYZC')
+            print(pred_axes, value)
+
             if isinstance(value,numbers.Number):
-                value = tuple(value if a in "XYZ" else 1 for a in plugin.axes.value)
+                value = tuple(value if a in "XYZ" else 1 for a in pred_axes)
             
             try:
                 value = tuple(value)
-                len(value) == len(shape) or _raise(TypeError())
+                len(value) == len(pred_axes) or _raise(TypeError())
             except TypeError:
-                raise ValueError(f'must be a tuple/list of length {len(shape)}')
+                
+                raise ValueError(f'must be a tuple/list of length {len(_pred_axes)}')
  
             if not all(isinstance(t,numbers.Number) and t > 0 for t in value):
                 raise ValueError(f'each value must be an float >= 0')
