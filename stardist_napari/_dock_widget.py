@@ -164,7 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
-        input_scale     = dict(widget_type='LiteralEvalLineEdit', label='Image scaling factor', value=DEFAULTS['input_scale']),
+        input_scale     = dict(widget_type='LiteralEvalLineEdit', label='Input image scaling', value=DEFAULTS['input_scale']),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -212,18 +212,14 @@ def plugin_wrapper():
         model = get_model(*model_selected)
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
-        
-        
-        
+
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
-        
-        if input_scale is None:
-            input_scale = tuple(1 for a in axes if not a in ('T',))
-        
-        print(f'scaling by {input_scale}')
+        if not (input_scale is None or isinstance(input_scale, numbers.Number)):
+            input_scale = tuple(s for a,s in zip(axes,input_scale) if a not in ('T',))
+            # print(f'scaling by {input_scale}')
 
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
@@ -416,7 +412,6 @@ def plugin_wrapper():
     plugin.input_scale.value = DEFAULTS['input_scale']
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
 
-    plugin.input_scale.tooltip = 'Scales input by this factor (e.g. set to values <1 in the case of oversegmentation)'
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
     for w in (plugin.label_head, plugin.label_nn, plugin.label_nms, plugin.label_adv):
         w.native.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
@@ -440,17 +435,15 @@ def plugin_wrapper():
 
 
     class Updater:
-        """  Class that allows for joint validation of different parameters
+        """Class that allows for joint validation of different parameters.
 
-        update = Updater() 
+        update = Updater()
         update('param', valid=True, args=some_value)
 
         To add a new plugin field:
-
-            * put single field validation logic inside the plugin fields change handler 
-            * add update() call inside change handler 
+            * put single field validation logic inside the plugin fields change handler
+            * add update() call inside change handler
             * add _param() inner function inside Updater._update() and call it therein
-
 
         """
         def __init__(self, debug=DEBUG):
@@ -492,7 +485,6 @@ def plugin_wrapper():
                             plugin.axes.value = ''
                             plugin.n_tiles.value = 'None'
                             plugin.input_scale.value = 'None'
-
 
 
             def _model(valid):
@@ -554,7 +546,7 @@ def plugin_wrapper():
                 else:
                     msg = str(err) if err is not None else ''
                     plugin.n_tiles.tooltip = msg
-            
+
             def _no_tiling_for_axis(axes_image, n_tiles, axis):
                 if n_tiles is not None and axis in axes_image:
                     return n_tiles[axes_dict(axes_image)[axis]] == 1
@@ -564,11 +556,24 @@ def plugin_wrapper():
                 input_scale, image, err = getattr(self.args, 'input_scale', (None,None,None))
                 widgets_valid(plugin.input_scale, valid=(valid or image is None))
                 if valid:
-                    plugin.input_scale.tooltip = 'no scaling' if input_scale is None else '\n'.join([f'{t}: {s}' for t,s in zip(input_scale,get_data(image).shape)])
+                    if input_scale is None:
+                        plugin.input_scale.tooltip = 'no scaling'
+                    elif isinstance(input_scale, numbers.Number):
+                        plugin.input_scale.tooltip = f'{input_scale} for all spatial axes'
+                    else:
+                        assert len(input_scale) == len(get_data(image).shape)
+                        plugin.input_scale.tooltip = '\n'.join([f'{s}' for s in input_scale])
                     return input_scale
                 else:
                     msg = str(err) if err is not None else ''
                     plugin.input_scale.tooltip = msg
+
+            def _input_scale_check(axes_image, input_scale):
+                if input_scale is not None and not isinstance(input_scale, numbers.Number):
+                    assert len(input_scale) == len(axes_image)
+                    # s != 1 only allowed for spatial axes XYZ
+                    return all(s == 1 or a in 'XYZ' for a,s in zip(axes_image,input_scale))
+                return True
 
             def _restore():
                 widgets_valid(plugin.image, valid=plugin.image.value is not None)
@@ -582,7 +587,7 @@ def plugin_wrapper():
                 axes_model, config = _model(True)
                 axes_norm          = _norm_axes(True)
                 n_tiles            = _n_tiles(True)
-                input_scale        = _input_scale(True) 
+                input_scale        = _input_scale(True)
 
                 if not _no_tiling_for_axis(axes_image, n_tiles, 'C'):
                     # check if image axes and n_tiles are compatible
@@ -596,6 +601,13 @@ def plugin_wrapper():
                     err = 'number of tiles must be 1 for T axis'
                     plugin.n_tiles.tooltip = err
                     _restore()
+                elif not _input_scale_check(axes_image, input_scale):
+                    # check if image axes and input_scale are compatible
+                    widgets_valid(plugin.input_scale, valid=False)
+                    _violations = ', '.join(a for a,s in zip(axes_image,input_scale) if not (s == 1 or a in 'XYZ'))
+                    err = f'values for non-spatial axes ({_violations}) must be 1'
+                    plugin.input_scale.tooltip = err
+                    _restore()
                 elif set(axes_norm).isdisjoint(set(axes_image)):
                     # check if image axes and normalization axes are compatible
                     widgets_valid(plugin.norm_axes, valid=False)
@@ -608,6 +620,12 @@ def plugin_wrapper():
                     plugin.output_type.tooltip = 'Polyhedra output currently not supported for 3D timelapse data'
                     _restore()
                 else:
+                    # tooltip for input_scale
+                    if isinstance(input_scale, numbers.Number):
+                        plugin.input_scale.tooltip = '\n'.join([f'{a} = {input_scale if a in "XYZ" else 1}' for a in axes_image])
+                    elif input_scale is not None:
+                        plugin.input_scale.tooltip = '\n'.join([f'{a} = {s}' for a,s in zip(axes_image,input_scale)])
+
                     # check if image and model are compatible
                     ch_model = config['n_channel_in']
                     ch_image = get_data(image).shape[axes_dict(axes_image)['C']] if 'C' in axes_image else 1
@@ -822,6 +840,8 @@ def plugin_wrapper():
         except (ValueError, SyntaxError) as err:
             update('n_tiles', False, (None, image, err))
 
+
+    # -> triggered by _image_change
     @change_handler(plugin.input_scale, init=False)
     def _input_scale_change():
         image = plugin.image.value
@@ -832,24 +852,13 @@ def plugin_wrapper():
                 update('input_scale', True, (None, image, None))
                 return
             shape = get_data(image).shape
-
-            # axes over which prediction happens (excluding 'T' etc)
-            pred_axes = tuple(a for a in plugin.axes.value if a in 'XYZC')
-            print(pred_axes, value)
-
-            if isinstance(value,numbers.Number):
-                value = tuple(value if a in "XYZ" else 1 for a in pred_axes)
-            
             try:
-                value = tuple(value)
-                len(value) == len(pred_axes) or _raise(TypeError())
+                isinstance(value, numbers.Number) or len(tuple(value)) == len(shape) or _raise(TypeError())
             except TypeError:
-                
-                raise ValueError(f'must be a tuple/list of length {len(_pred_axes)}')
- 
-            if not all(isinstance(t,numbers.Number) and t > 0 for t in value):
-                raise ValueError(f'each value must be an float >= 0')
-                
+                raise ValueError(f'must be a scalar value or tuple/list of length {len(shape)}')
+            if not all(isinstance(t, numbers.Number) and t > 0
+                       for t in ((value,) if isinstance(value, numbers.Number) else value)):
+                raise ValueError(f'each value must be a number > 0')
             update('input_scale', True, (value, image, None))
         except (ValueError, SyntaxError) as err:
             update('input_scale', False, (None, image, err))
@@ -877,7 +886,6 @@ def plugin_wrapper():
 
     # -------------------------------------------------------------------------
 
-    
     # allow some widgets to shrink because their size depends on user input
     plugin.image.native.setMinimumWidth(240)
     plugin.model2d.native.setMinimumWidth(240)
@@ -900,5 +908,8 @@ def plugin_wrapper():
 
     # push 'call_button' and 'progress_bar' to bottom
     layout.insertStretch(layout.count()-2)
+
+    # for i in range(layout.count()):
+    #     print(i, layout.itemAt(i).widget())
 
     return plugin
