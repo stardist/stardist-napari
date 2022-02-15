@@ -901,7 +901,7 @@ def plugin_wrapper():
 
     # reduce vertical spacing and fontsize
     layout = plugin.native.layout()
-    layout.setSpacing(6)
+    layout.setSpacing(3)
     # for i in range(len(layout)) :
     #     w = layout.itemAt(i).widget()
     #     w.setStyleSheet("""QWidget {font-size:11px;}""")
