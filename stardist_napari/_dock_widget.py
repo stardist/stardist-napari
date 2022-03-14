@@ -28,7 +28,6 @@ from qtpy.QtWidgets import QSizePolicy
 from napari.utils.colormaps import label_colormap
 from typing import List, Union
 from enum import Enum
-from .match_labels import match_labels
 
 
 def surface_from_polys(polys):
@@ -61,6 +60,7 @@ def plugin_wrapper():
     from csbdeep.utils import load_json
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
+    from stardist.matching import group_matching_labels
 
     DEBUG = False
 
@@ -322,7 +322,7 @@ def plugin_wrapper():
             if len(polys) > 1:
                 if timelapse_opts == TimelapseLabels.Match.value:
                     # match labels in consecutive frames (-> simple IoU tracking)
-                    labels = match_labels(labels, iou_threshold=0)
+                    labels = group_matching_labels(labels)
                 elif timelapse_opts == TimelapseLabels.Unique.value:
                     # make label ids unique (shift by offset)
                     offsets = np.cumsum([len(p['points']) for p in polys])
