@@ -9,7 +9,7 @@ TODO:
 - try progress bar via @thread_workers
 """
 
-# from napari_plugin_engine import napari_hook_implementation
+import numbers
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.events import Event, Signal
@@ -28,7 +28,6 @@ from qtpy.QtWidgets import QSizePolicy
 from napari.utils.colormaps import label_colormap
 from typing import List, Union
 from enum import Enum
-from .match_labels import match_labels
 
 
 def surface_from_polys(polys):
@@ -61,6 +60,7 @@ def plugin_wrapper():
     from csbdeep.utils import load_json
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
+    from stardist.matching import group_matching_labels
 
     DEBUG = False
 
@@ -134,6 +134,7 @@ def plugin_wrapper():
         model2d        = models2d[0][1],
         model3d        = models3d[0][1],
         norm_image     = True,
+        input_scale    = 'None',
         perc_low       =  1.0,
         perc_high      = 99.8,
         norm_axes      = 'ZYX',
@@ -163,6 +164,7 @@ def plugin_wrapper():
         label_nms       = dict(widget_type='Label', label='<br><b>NMS Postprocessing:</b>'),
         perc_low        = dict(widget_type='FloatSpinBox', label='Percentile low',              min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_low']),
         perc_high       = dict(widget_type='FloatSpinBox', label='Percentile high',             min=0.0, max=100.0, step=0.1,  value=DEFAULTS['perc_high']),
+        input_scale     = dict(widget_type='LiteralEvalLineEdit', label='Input image scaling', value=DEFAULTS['input_scale']),
         norm_axes       = dict(widget_type='LineEdit',     label='Normalization Axes',                                         value=DEFAULTS['norm_axes']),
         prob_thresh     = dict(widget_type='FloatSpinBox', label='Probability/Score Threshold', min=0.0, max=  1.0, step=0.05, value=DEFAULTS['prob_thresh']),
         nms_thresh      = dict(widget_type='FloatSpinBox', label='Overlap Threshold',           min=0.0, max=  1.0, step=0.05, value=DEFAULTS['nms_thresh']),
@@ -192,6 +194,7 @@ def plugin_wrapper():
         norm_image,
         perc_low,
         perc_high,
+        input_scale,
         label_nms,
         prob_thresh,
         nms_thresh,
@@ -213,6 +216,10 @@ def plugin_wrapper():
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if not (input_scale is None or isinstance(input_scale, numbers.Number)):
+            input_scale = tuple(s for a,s in zip(axes,input_scale) if a not in ('T',))
+            # print(f'scaling by {input_scale}')
 
         if not axes.replace('T','').startswith(model._axes_out.replace('C','')):
             warn(f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})")
@@ -300,6 +307,7 @@ def plugin_wrapper():
             res = tuple(zip(*tuple(model.predict_instances(_x, axes=axes_reorder,
                                             prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                             n_tiles=n_tiles,
+                                            scale=input_scale,
                                             sparse=(not cnn_output), return_predict=cnn_output)
                                              for _x in progress(x_reorder))))
 
@@ -314,7 +322,7 @@ def plugin_wrapper():
             if len(polys) > 1:
                 if timelapse_opts == TimelapseLabels.Match.value:
                     # match labels in consecutive frames (-> simple IoU tracking)
-                    labels = match_labels(labels, iou_threshold=0)
+                    labels = group_matching_labels(labels)
                 elif timelapse_opts == TimelapseLabels.Unique.value:
                     # make label ids unique (shift by offset)
                     offsets = np.cumsum([len(p['points']) for p in polys])
@@ -346,6 +354,7 @@ def plugin_wrapper():
             # TODO: possible to run this in a way that it can be canceled?
             pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                            n_tiles=n_tiles, show_tile_progress=progress,
+                                           scale=input_scale,
                                            sparse=(not cnn_output), return_predict=cnn_output)
         progress_bar.hide()
 
@@ -400,6 +409,7 @@ def plugin_wrapper():
     # don't want to load persisted values for these widgets
     plugin.axes.value = ''
     plugin.n_tiles.value = DEFAULTS['n_tiles']
+    plugin.input_scale.value = DEFAULTS['input_scale']
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
 
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
@@ -425,10 +435,21 @@ def plugin_wrapper():
 
 
     class Updater:
+        """Class that allows for joint validation of different parameters.
+
+        update = Updater()
+        update('param', valid=True, args=some_value)
+
+        To add a new plugin field:
+            * put single field validation logic inside the plugin fields change handler
+            * add update() call inside change handler
+            * add _param() inner function inside Updater._update() and call it therein
+
+        """
         def __init__(self, debug=DEBUG):
             from types import SimpleNamespace
             self.debug = debug
-            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles', 'norm_axes')})
+            self.valid = SimpleNamespace(**{k:False for k in ('image_axes', 'model', 'n_tiles', 'norm_axes', 'input_scale')})
             self.args  = SimpleNamespace()
             self.viewer = None
 
@@ -463,6 +484,7 @@ def plugin_wrapper():
                             plugin.image.tooltip = ''
                             plugin.axes.value = ''
                             plugin.n_tiles.value = 'None'
+                            plugin.input_scale.value = 'None'
 
 
             def _model(valid):
@@ -530,6 +552,29 @@ def plugin_wrapper():
                     return n_tiles[axes_dict(axes_image)[axis]] == 1
                 return True
 
+            def _input_scale(valid):
+                input_scale, image, err = getattr(self.args, 'input_scale', (None,None,None))
+                widgets_valid(plugin.input_scale, valid=(valid or image is None))
+                if valid:
+                    if input_scale is None:
+                        plugin.input_scale.tooltip = 'no scaling'
+                    elif isinstance(input_scale, numbers.Number):
+                        plugin.input_scale.tooltip = f'{input_scale} for all spatial axes'
+                    else:
+                        assert len(input_scale) == len(get_data(image).shape)
+                        plugin.input_scale.tooltip = '\n'.join([f'{s}' for s in input_scale])
+                    return input_scale
+                else:
+                    msg = str(err) if err is not None else ''
+                    plugin.input_scale.tooltip = msg
+
+            def _input_scale_check(axes_image, input_scale):
+                if input_scale is not None and not isinstance(input_scale, numbers.Number):
+                    assert len(input_scale) == len(axes_image)
+                    # s != 1 only allowed for spatial axes XYZ
+                    return all(s == 1 or a in 'XYZ' for a,s in zip(axes_image,input_scale))
+                return True
+
             def _restore():
                 widgets_valid(plugin.image, valid=plugin.image.value is not None)
 
@@ -537,11 +582,13 @@ def plugin_wrapper():
             all_valid = False
             help_msg = ''
 
-            if self.valid.image_axes and self.valid.n_tiles and self.valid.model and self.valid.norm_axes:
+            if self.valid.image_axes and self.valid.n_tiles and self.valid.model and self.valid.norm_axes and self.valid.input_scale:
                 axes_image, image  = _image_axes(True)
                 axes_model, config = _model(True)
                 axes_norm          = _norm_axes(True)
-                n_tiles = _n_tiles(True)
+                n_tiles            = _n_tiles(True)
+                input_scale        = _input_scale(True)
+
                 if not _no_tiling_for_axis(axes_image, n_tiles, 'C'):
                     # check if image axes and n_tiles are compatible
                     widgets_valid(plugin.n_tiles, valid=False)
@@ -553,6 +600,13 @@ def plugin_wrapper():
                     widgets_valid(plugin.n_tiles, valid=False)
                     err = 'number of tiles must be 1 for T axis'
                     plugin.n_tiles.tooltip = err
+                    _restore()
+                elif not _input_scale_check(axes_image, input_scale):
+                    # check if image axes and input_scale are compatible
+                    widgets_valid(plugin.input_scale, valid=False)
+                    _violations = ', '.join(a for a,s in zip(axes_image,input_scale) if not (s == 1 or a in 'XYZ'))
+                    err = f'values for non-spatial axes ({_violations}) must be 1'
+                    plugin.input_scale.tooltip = err
                     _restore()
                 elif set(axes_norm).isdisjoint(set(axes_image)):
                     # check if image axes and normalization axes are compatible
@@ -566,6 +620,12 @@ def plugin_wrapper():
                     plugin.output_type.tooltip = 'Polyhedra output currently not supported for 3D timelapse data'
                     _restore()
                 else:
+                    # tooltip for input_scale
+                    if isinstance(input_scale, numbers.Number):
+                        plugin.input_scale.tooltip = '\n'.join([f'{a} = {input_scale if a in "XYZ" else 1}' for a in axes_image])
+                    elif input_scale is not None:
+                        plugin.input_scale.tooltip = '\n'.join([f'{a} = {s}' for a,s in zip(axes_image,input_scale)])
+
                     # check if image and model are compatible
                     ch_model = config['n_channel_in']
                     ch_image = get_data(image).shape[axes_dict(axes_image)['C']] if 'C' in axes_image else 1
@@ -580,6 +640,7 @@ def plugin_wrapper():
                 _image_axes(self.valid.image_axes)
                 _norm_axes(self.valid.norm_axes)
                 _n_tiles(self.valid.n_tiles)
+                _input_scale(self.valid.input_scale)
                 _model(self.valid.model)
                 _restore()
 
@@ -733,7 +794,9 @@ def plugin_wrapper():
             plugin.axes.changed(axes)
         else:
             plugin.axes.value = axes
+
         plugin.n_tiles.changed(plugin.n_tiles.value)
+        plugin.input_scale.changed(plugin.input_scale.value)
         plugin.norm_axes.changed(plugin.norm_axes.value)
 
 
@@ -778,6 +841,28 @@ def plugin_wrapper():
             update('n_tiles', False, (None, image, err))
 
 
+    # -> triggered by _image_change
+    @change_handler(plugin.input_scale, init=False)
+    def _input_scale_change():
+        image = plugin.image.value
+        try:
+            image is not None or _raise(ValueError("no image selected"))
+            value = plugin.input_scale.get_value()
+            if value is None:
+                update('input_scale', True, (None, image, None))
+                return
+            shape = get_data(image).shape
+            try:
+                isinstance(value, numbers.Number) or len(tuple(value)) == len(shape) or _raise(TypeError())
+            except TypeError:
+                raise ValueError(f'must be a scalar value or tuple/list of length {len(shape)}')
+            if not all(isinstance(t, numbers.Number) and t > 0
+                       for t in ((value,) if isinstance(value, numbers.Number) else value)):
+                raise ValueError(f'each value must be a number > 0')
+            update('input_scale', True, (value, image, None))
+        except (ValueError, SyntaxError) as err:
+            update('input_scale', False, (None, image, err))
+
     # -------------------------------------------------------------------------
 
     # set thresholds to optimized values for chosen model
@@ -814,14 +899,17 @@ def plugin_wrapper():
     # plugin.model_axes.native.setReadOnly(True)
     plugin.model_axes.enabled = False
 
-    # push 'call_button' and 'progress_bar' to bottom
+    # reduce vertical spacing and fontsize
     layout = plugin.native.layout()
+    layout.setSpacing(5)
+    # for i in range(len(layout)) :
+    #     w = layout.itemAt(i).widget()
+    #     w.setStyleSheet("""QWidget {font-size:11px;}""")
+
+    # push 'call_button' and 'progress_bar' to bottom
     layout.insertStretch(layout.count()-2)
 
+    # for i in range(layout.count()):
+    #     print(i, layout.itemAt(i).widget())
+
     return plugin
-
-
-
-# @napari_hook_implementation
-# def napari_experimental_provide_dock_widget():
-#     return plugin_wrapper, dict(name='StarDist', add_vertical_stretch=False)

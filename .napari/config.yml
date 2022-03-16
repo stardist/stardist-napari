@@ -1,5 +1,5 @@
-
-# Add labels the plugin from the EDAM Bioimaging ontology
+# https://github.com/chanzuckerberg/napari-hub/wiki/A-plugin-developer’s-guide-to-categories-on-the-napari-hub
+# https://bioportal.bioontology.org/ontologies/EDAM-BIOIMAGING/?p=classes&conceptid=root
 labels:
   ontology: EDAM-BIOIMAGING:alpha06
   terms:
@@ -8,6 +8,7 @@ labels:
   - 2D image
   - 3D image
   - Image time series
+  - Multi-channel image
   - Object detection
   - Cell segmentation
   - Model-based segmentation

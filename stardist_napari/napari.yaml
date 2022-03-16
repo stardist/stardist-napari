@@ -8,6 +8,9 @@ contributions:
   - id: stardist-napari.data.nuclei_2d
     title: Nuclei (2D) sample
     python_name: stardist_napari._sample_data:_test_image_nuclei_2d
+  - id: stardist-napari.data.he_2d
+    title: H&E Nuclei (2D RGB) sample
+    python_name: stardist_napari._sample_data:_test_image_he_2d
   - id: stardist-napari.data.nuclei_3d
     title: Nuclei (3D) sample
     python_name: stardist_napari._sample_data:_test_image_nuclei_3d
@@ -21,3 +24,6 @@ contributions:
   - key: nuclei_3d
     display_name: Nuclei (3D)
     command: stardist-napari.data.nuclei_3d
+  - key: he_2d
+    display_name: H&E Nuclei (2D RGB)
+    command: stardist-napari.data.he_2d
