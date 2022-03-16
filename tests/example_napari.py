@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import napari
 
-from stardist.models import Config3D, StarDist3D
+from stardist.models import StarDist2D, StarDist3D
 from stardist.data import  test_image_nuclei_2d, test_image_nuclei_3d
 from csbdeep.utils import normalize
 import napari
@@ -34,6 +34,9 @@ def show_napari_2d_time():
 
     viewer =  napari.Viewer()
     viewer.add_image(x, scale=(1,1,1))
+    # viewer.add_image(x[...,:1], scale=(1,1,1))
+    # viewer.add_image(x[:1], scale=(1,1,1))
+    # viewer.add_image(np.random.uniform(size=(128,128,3)), rgb=True)
     viewer.window.add_plugin_dock_widget('stardist-napari','StarDist')
     return viewer
 
