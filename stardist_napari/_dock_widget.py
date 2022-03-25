@@ -11,6 +11,7 @@ TODO:
 
 import functools
 import numbers
+import os
 import time
 from enum import Enum
 from pathlib import Path
@@ -65,7 +66,14 @@ def plugin_wrapper():
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
 
-    DEBUG = False
+    DEBUG = os.environ.get("STARDIST_NAPARI_DEBUG", "").lower() in (
+        "y",
+        "yes",
+        "t",
+        "true",
+        "on",
+        "1",
+    )
 
     def get_data(image):
         image = image.data[0] if image.multiscale else image.data
@@ -93,16 +101,16 @@ def plugin_wrapper():
 
     # -------------------------------------------------------------------------
 
-    # get available models
-    _models2d, _aliases2d = get_registered_models(StarDist2D)
-    _models3d, _aliases3d = get_registered_models(StarDist3D)
-    # use first alias for model selection (if alias exists)
-    models2d = [
-        ((_aliases2d[m][0] if len(_aliases2d[m]) > 0 else m), m) for m in _models2d
-    ]
-    models3d = [
-        ((_aliases3d[m][0] if len(_aliases3d[m]) > 0 else m), m) for m in _models3d
-    ]
+    _models, _aliases = {}, {}
+    models_reg = {}
+    for cls in (StarDist2D, StarDist3D):
+        # get available models for class
+        _models[cls], _aliases[cls] = get_registered_models(cls)
+        # use first alias for model selection (if alias exists)
+        models_reg[cls] = [
+            ((_aliases[cls][m][0] if len(_aliases[cls][m]) > 0 else m), m)
+            for m in _models[cls]
+        ]
 
     model_configs = dict()
     model_threshs = dict()
@@ -150,8 +158,8 @@ def plugin_wrapper():
 
     DEFAULTS = dict(
         model_type=StarDist2D,
-        model2d=models2d[0][1],
-        model3d=models3d[0][1],
+        model2d=models_reg[StarDist2D][0][1],
+        model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
         input_scale="None",
         perc_low=1.0,
@@ -187,14 +195,14 @@ def plugin_wrapper():
             widget_type="ComboBox",
             visible=False,
             label="Pre-trained Model",
-            choices=models2d,
+            choices=models_reg[StarDist2D],
             value=DEFAULTS["model2d"],
         ),
         model3d=dict(
             widget_type="ComboBox",
             visible=False,
             label="Pre-trained Model",
-            choices=models3d,
+            choices=models_reg[StarDist3D],
             value=DEFAULTS["model3d"],
         ),
         model_folder=dict(

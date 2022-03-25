@@ -1,4 +1,7 @@
+import os
 import sys
+
+os.environ["STARDIST_NAPARI_DEBUG"] = "1"
 
 import napari
 import numpy as np
