@@ -49,5 +49,6 @@ setup(
         'tensorflow-macos;  platform_system=="Darwin" and platform_machine=="arm64"',
         "napari>=0.4.13",
         "magicgui>=0.3.0",
+        "plausible-events @ git+https://github.com/uschmidt83/plausible-events.git",  # temporary
     ],
 )
