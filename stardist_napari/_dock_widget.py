@@ -29,15 +29,6 @@ from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
 from qtpy.QtWidgets import QSizePolicy
 
-try:
-    import platform
-
-    from plausible_events import PlausibleEvents
-
-    PE = PlausibleEvents(domain="stardist-napari")
-except:
-    PE = None
-
 
 def surface_from_polys(polys):
     from stardist.geometry import dist_to_coord3D
@@ -92,22 +83,6 @@ def plugin_wrapper():
         "on",
         "1",
     )
-
-    try:
-        # analytics
-        launch_props = {
-            "platform": platform.platform().strip(),
-            "python": platform.python_version(),
-            "napari": napari.__version__,
-            "magicgui": _magicgui_version,
-            "csbdeep": csbdeep.__version__,
-            "stardist": stardist.__version__,
-            "stardist-napari": __version__,
-        }
-        PE.event("Launch", launch_props)
-    except Exception as e:
-        if DEBUG:
-            raise e
 
     def get_data(image):
         image = image.data[0] if image.multiscale else image.data
@@ -176,6 +151,17 @@ def plugin_wrapper():
             return model_class(None, name=path.name, basedir=str(path.parent))
         else:
             return model_type.from_pretrained(model)
+
+    # -------------------------------------------------------------------------
+
+    try:
+        import platform
+
+        from plausible_events import PlausibleEvents
+
+        PE = PlausibleEvents(domain="stardist-napari")
+    except:
+        PE = None
 
     # -------------------------------------------------------------------------
 
@@ -324,6 +310,15 @@ def plugin_wrapper():
             text="Set optimized postprocessing thresholds (for selected model)",
         ),
         defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
+        label_analytics=dict(
+            widget_type="Label",
+            label="<b>Analytics:</b>",
+        ),
+        analytics=dict(
+            widget_type="CheckBox",
+            text="Share anonymous usage data",
+            value=False,
+        ),
         progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
         persist=True,
@@ -355,6 +350,8 @@ def plugin_wrapper():
         cnn_output,
         set_thresholds,
         defaults_button,
+        label_analytics,
+        analytics,
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
@@ -406,46 +403,47 @@ def plugin_wrapper():
             #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low, perc_high, axis=_axis)
 
-        try:
-            # analytics
-            def _model_name():
-                # only disclose model names of "public" registered/pre-trained models
-                model_type, model_name = model_selected
-                if model_type in models_reg:
-                    return (
-                        model_name
-                        if (model_name in models_reg_public.get(model_type, {}))
-                        else "Custom (registered)"
-                    )
-                else:
-                    return "Custom (folder)"
+        if analytics:
+            try:
 
-            def _shape_pow2(shape):
-                return tuple(int(2 ** np.ceil(np.log2(s))) for s in shape)
+                def _model_name():
+                    # only disclose model names of "public" registered/pre-trained models
+                    model_type, model_name = model_selected
+                    if model_type in models_reg:
+                        return (
+                            model_name
+                            if (model_name in models_reg_public.get(model_type, {}))
+                            else "Custom (registered)"
+                        )
+                    else:
+                        return "Custom (folder)"
 
-            run_props = {
-                "model": _model_name(),
-                "image_shape": _shape_pow2(x.shape),
-                "image_axes": axes,
-                "image_norm": (perc_low, perc_high) if norm_image else False,
-                "image_scale": input_scale,
-                "image_tiles": n_tiles,
-                "thresh_prob": prob_thresh,
-                "thresh_nms": nms_thresh,
-                "output_type": {t.value: t.name for t in Output}[output_type],
-                "output_cnn": cnn_output,
-                "norm_axes": norm_axes,
-            }
-            if "T" in axes:
-                run_props["timelapse"] = {t.value: t.name for t in TimelapseLabels}[
-                    timelapse_opts
-                ]
-            run_event = {StarDist2D: "Run 2D", StarDist3D: "Run 3D"}[type(model)]
-            PE.event(run_event, run_props)
+                def _shape_pow2(shape):
+                    return tuple(int(2 ** np.ceil(np.log2(s))) for s in shape)
 
-        except Exception as e:
-            if DEBUG:
-                raise e
+                run_props = {
+                    "model": _model_name(),
+                    "image_shape": _shape_pow2(x.shape),
+                    "image_axes": axes,
+                    "image_norm": (perc_low, perc_high) if norm_image else False,
+                    "image_scale": input_scale,
+                    "image_tiles": n_tiles,
+                    "thresh_prob": prob_thresh,
+                    "thresh_nms": nms_thresh,
+                    "output_type": {t.value: t.name for t in Output}[output_type],
+                    "output_cnn": cnn_output,
+                    "norm_axes": norm_axes,
+                }
+                if "T" in axes:
+                    run_props["timelapse"] = {t.value: t.name for t in TimelapseLabels}[
+                        timelapse_opts
+                    ]
+                run_event = {StarDist2D: "Run 2D", StarDist3D: "Run 3D"}[type(model)]
+                PE.event(run_event, run_props)
+
+            except Exception as e:
+                if DEBUG:
+                    raise e
 
         # TODO: progress bar (labels) often don't show up. events not processed?
         if "T" in axes:
@@ -686,6 +684,7 @@ def plugin_wrapper():
     plugin.n_tiles.value = DEFAULTS["n_tiles"]
     plugin.input_scale.value = DEFAULTS["input_scale"]
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
+    plugin.label_analytics.value = '<small>Help improve this plugin by sharing usage data.<br></small><a href="https://github.com/stardist/stardist-napari/pull/12" style="color:gray;">What is shared and why.</a>'
 
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
     for w in (plugin.label_head, plugin.label_nn, plugin.label_nms, plugin.label_adv):
@@ -1249,6 +1248,11 @@ def plugin_wrapper():
         for k, v in DEFAULTS.items():
             getattr(plugin, k).value = v
 
+    # analytics
+    @change_handler(plugin.analytics, init=True)
+    def _analytics_change():
+        widgets_inactive(plugin.label_analytics, active=(not plugin.analytics.value))
+
     # -------------------------------------------------------------------------
 
     # allow some widgets to shrink because their size depends on user input
@@ -1258,6 +1262,7 @@ def plugin_wrapper():
     plugin.timelapse_opts.native.setMinimumWidth(240)
 
     plugin.label_head.native.setOpenExternalLinks(True)
+    plugin.label_analytics.native.setOpenExternalLinks(True)
     # make reset button smaller
     # plugin.defaults_button.native.setMaximumWidth(150)
 
@@ -1276,5 +1281,21 @@ def plugin_wrapper():
 
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
+
+    if plugin.analytics.value:
+        try:
+            launch_props = {
+                "platform": platform.platform().strip(),
+                "python": platform.python_version(),
+                "napari": napari.__version__,
+                "magicgui": _magicgui_version,
+                "csbdeep": csbdeep.__version__,
+                "stardist": stardist.__version__,
+                "stardist-napari": __version__,
+            }
+            PE.event("Launch", launch_props)
+        except Exception as e:
+            if DEBUG:
+                raise e
 
     return plugin
