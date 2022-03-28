@@ -23,7 +23,7 @@ import numpy as np
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.application import use_app
-from magicgui.events import Event, Signal
+from psygnal import Signal
 from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
 from qtpy.QtWidgets import QSizePolicy
