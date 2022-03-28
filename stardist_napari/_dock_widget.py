@@ -294,6 +294,7 @@ def plugin_wrapper():
             progress_bar.show()
             use_app().process_events()
 
+        
         # semantic output axes of predictions
         assert model._axes_out[-1] == 'C'
         axes_out = list(model._axes_out[:-1])
@@ -306,15 +307,12 @@ def plugin_wrapper():
                                             prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                             n_tiles=n_tiles,
                                             scale=input_scale,
-                                            sparse=(not cnn_output), return_predict=cnn_output)
+                                            sparse=(not cnn_output), return_predict=True)
                                              for _x in progress(x_reorder))))
 
-            if cnn_output:
-                labels, polys = tuple(zip(*res[0]))
-                cnn_output = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
-            else:
-                labels, polys = res
-
+            labels, polys = tuple(zip(*res[0]))
+            cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
+            
             labels = np.asarray(labels)
 
             if len(polys) > 1:
@@ -343,17 +341,13 @@ def plugin_wrapper():
                     points = np.concatenate(tuple(np.insert(p['points'], t, _t, axis=-1) for _t,p in enumerate(polys)),axis=0)
                 )
 
-            if cnn_output:
-                pred = (labels, polys), cnn_output
-            else:
-                pred = labels, polys
-
+            
         else:
             # TODO: possible to run this in a way that it can be canceled?
-            pred = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
+            (labels, polys), cnn_out = model.predict_instances(x, axes=axes, prob_thresh=prob_thresh, nms_thresh=nms_thresh,
                                            n_tiles=n_tiles, show_tile_progress=progress,
                                            scale=input_scale,
-                                           sparse=(not cnn_output), return_predict=cnn_output)
+                                           sparse=(not cnn_output), return_predict=True)
         progress_bar.hide()
 
         # determine scale for output axes
@@ -362,8 +356,6 @@ def plugin_wrapper():
 
         layers = []
         if cnn_output:
-            (labels,polys), cnn_out = pred
-                
             prob, dist = cnn_out[:2]
             dist = np.moveaxis(dist, -1,0)
 
@@ -383,15 +375,23 @@ def plugin_wrapper():
                                       **lkwargs), 'image'))
 
             if model._is_multiclass():
-                class_output = np.moveaxis(cnn_out[-1], -1, 0)
-                layers.append((class_output, dict(name='StarDist class probabilities',
+                prob_class = np.moveaxis(cnn_out[-1], -1, 0)
+                layers.append((prob_class, dict(name='StarDist class probabilities',
                                       scale=_scale, translate=_translate,
                                       **lkwargs), 'image'))
                                       
-        else:
-            labels, polys = pred
-
         if output_type in (Output.Labels.value,Output.Both.value):
+
+            if model._is_multiclass():
+                from skimage.measure import regionprops
+                prob, dist, prob_class = cnn_out
+                prob_class = np.expand_dims(prob,-1)*prob_class
+                labels_cls = np.zeros_like(labels)
+                for r in regionprops(labels):
+                    mask = labels[r.slice]==r.label
+                    labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
+                layers.append((labels_cls, dict(name='StarDist class labels', visible=False, scale=scale_out, opacity=.5, **lkwargs), 'labels'))
+
             layers.append((labels, dict(name='StarDist labels', scale=scale_out, opacity=.5, **lkwargs), 'labels'))
         if output_type in (Output.Polys.value,Output.Both.value):
             n_objects = len(polys['points'])
