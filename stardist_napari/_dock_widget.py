@@ -418,12 +418,15 @@ def plugin_wrapper():
                     else:
                         return "Custom (folder)"
 
-                def _shape_pow2(shape):
-                    return tuple(int(2 ** np.ceil(np.log2(s))) for s in shape)
+                def _shape_pow2(shape, axes):
+                    return tuple(
+                        s if a == "C" else int(2 ** np.ceil(np.log2(s)))
+                        for s, a in zip(shape, axes)
+                    )
 
                 run_props = {
                     "model": _model_name(),
-                    "image_shape": _shape_pow2(x.shape),
+                    "image_shape": _shape_pow2(x.shape, axes),
                     "image_axes": axes,
                     "image_norm": (perc_low, perc_high) if norm_image else False,
                     "image_scale": input_scale,
@@ -1289,6 +1292,8 @@ def plugin_wrapper():
                 "python": platform.python_version(),
                 "napari": napari.__version__,
                 "magicgui": _magicgui_version,
+                # "tensorflow": tensorflow.__version__,
+                # "keras": keras.__version__,
                 "csbdeep": csbdeep.__version__,
                 "stardist": stardist.__version__,
                 "stardist-napari": __version__,
