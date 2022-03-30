@@ -24,9 +24,9 @@ from magicgui import __version__ as _magicgui_version
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.application import use_app
-from psygnal import Signal
 from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
+from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
 
@@ -363,9 +363,16 @@ def plugin_wrapper():
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
-        if not (input_scale is None or isinstance(input_scale, numbers.Number)):
-            input_scale = tuple(s for a, s in zip(axes, input_scale) if a not in ("T",))
-            # print(f'scaling by {input_scale}')
+        if input_scale is not None:
+            if isinstance(input_scale, numbers.Number):
+                # apply scaling to all spatial axes
+                input_scale = tuple(input_scale if a in "XYZ" else 1 for a in axes)
+            input_scale_dict = dict(zip(axes, input_scale))
+            # remove potential entry for T axis (since frames processed in outer loop)
+            input_scale = tuple(s for a, s in zip(axes, input_scale) if a != "T")
+            # print(f"input scaling: {input_scale_dict}")
+        else:
+            input_scale_dict = {}
 
         if not axes.replace("T", "").startswith(model._axes_out.replace("C", "")):
             warn(
@@ -602,9 +609,16 @@ def plugin_wrapper():
             assert len(model.config.grid) == len(model.config.axes) - 1
             grid_dict = dict(zip(model.config.axes.replace("C", ""), model.config.grid))
             # scale output axes to match input axes
-            _scale = [s * grid_dict.get(a, 1) for a, s in zip(axes_out, scale_out)]
+            _scale = [
+                s * grid_dict.get(a, 1) / input_scale_dict.get(a, 1)
+                for a, s in zip(axes_out, scale_out)
+            ]
             # small translation correction if grid > 1 (since napari centers objects)
-            _translate = [0.5 * (grid_dict.get(a, 1) - 1) for a in axes_out]
+            # TODO: this doesn't look correct
+            _translate = [
+                0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
+                for a, s in zip(axes_out, scale_out)
+            ]
 
             layers.append(
                 (
