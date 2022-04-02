@@ -20,7 +20,6 @@ from warnings import warn
 
 import napari
 import numpy as np
-from magicgui import __version__ as _magicgui_version
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.application import use_app
@@ -55,8 +54,6 @@ def surface_from_polys(polys):
 def plugin_wrapper():
     # delay imports until plugin is requested by user
     # -> especially those importing tensorflow (csbdeep.models.*, stardist.models.*)
-    import csbdeep
-    import stardist
     from csbdeep.models.pretrained import (
         get_model_details,
         get_model_folder,
@@ -72,8 +69,6 @@ def plugin_wrapper():
     from stardist.matching import group_matching_labels
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
-
-    from . import __version__
 
     DEBUG = os.environ.get("STARDIST_NAPARI_DEBUG", "").lower() in (
         "y",
@@ -154,14 +149,7 @@ def plugin_wrapper():
 
     # -------------------------------------------------------------------------
 
-    try:
-        import platform
-
-        from plausible_events import PlausibleEvents
-
-        PE = PlausibleEvents(domain="stardist-napari")
-    except:
-        PE = None
+    from ._analytics import consent_event, launch_event, run_event
 
     # -------------------------------------------------------------------------
 
@@ -387,7 +375,7 @@ def plugin_wrapper():
             )  # relevant axes present in input image
             assert len(axes_norm) > 0
             # always jointly normalize channels for RGB images
-            if ("C" in axes and image.rgb == True) and ("C" not in axes_norm):
+            if ("C" in axes and image.rgb is True) and ("C" not in axes_norm):
                 axes_norm = axes_norm + "C"
                 warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
@@ -412,45 +400,25 @@ def plugin_wrapper():
 
         if analytics:
             try:
-
-                def _model_name():
-                    # only disclose model names of "public" registered/pre-trained models
-                    model_type, model_name = model_selected
-                    if model_type in models_reg:
-                        return (
-                            model_name
-                            if (model_name in models_reg_public.get(model_type, {}))
-                            else "Custom (registered)"
-                        )
-                    else:
-                        return "Custom (folder)"
-
-                def _shape_pow2(shape, axes):
-                    return tuple(
-                        s if a == "C" else int(2 ** np.ceil(np.log2(s)))
-                        for s, a in zip(shape, axes)
-                    )
-
-                run_props = {
-                    "model": _model_name(),
-                    "image_shape": _shape_pow2(x.shape, axes),
-                    "image_axes": axes,
-                    "image_norm": (perc_low, perc_high) if norm_image else False,
-                    "image_scale": input_scale,
-                    "image_tiles": n_tiles,
-                    "thresh_prob": prob_thresh,
-                    "thresh_nms": nms_thresh,
-                    "output_type": {t.value: t.name for t in Output}[output_type],
-                    "output_cnn": cnn_output,
-                    "norm_axes": norm_axes,
-                }
-                if "T" in axes:
-                    run_props["timelapse"] = {t.value: t.name for t in TimelapseLabels}[
-                        timelapse_opts
-                    ]
-                run_event = {StarDist2D: "Run 2D", StarDist3D: "Run 3D"}[type(model)]
-                PE.event(run_event, run_props)
-
+                run_event(
+                    model,
+                    model_selected,
+                    models_reg,
+                    models_reg_public,
+                    x.shape,
+                    axes,
+                    perc_low,
+                    perc_high,
+                    norm_image,
+                    input_scale,
+                    n_tiles,
+                    prob_thresh,
+                    nms_thresh,
+                    cnn_output,
+                    norm_axes,
+                    output_type={t.value: t.name for t in Output}[output_type],
+                    timelapse={t.value: t.name for t in TimelapseLabels}[timelapse_opts],
+                )
             except Exception as e:
                 if DEBUG:
                     raise e
@@ -1269,6 +1237,11 @@ def plugin_wrapper():
     @change_handler(plugin.analytics, init=True)
     def _analytics_change():
         widgets_inactive(plugin.label_analytics, active=(not plugin.analytics.value))
+        try:
+            consent_event(plugin.analytics.value)
+        except Exception as e:
+            if DEBUG:
+                raise e
 
     # -------------------------------------------------------------------------
 
@@ -1301,18 +1274,7 @@ def plugin_wrapper():
 
     if plugin.analytics.value:
         try:
-            launch_props = {
-                "platform": platform.platform().strip(),
-                "python": platform.python_version(),
-                "napari": napari.__version__,
-                "magicgui": _magicgui_version,
-                # "tensorflow": tensorflow.__version__,
-                # "keras": keras.__version__,
-                "csbdeep": csbdeep.__version__,
-                "stardist": stardist.__version__,
-                "stardist-napari": __version__,
-            }
-            PE.event("Launch", launch_props)
+            launch_event()
         except Exception as e:
             if DEBUG:
                 raise e
