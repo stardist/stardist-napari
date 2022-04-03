@@ -183,7 +183,9 @@ def plugin_wrapper():
         ),
         image=dict(label="Input Image"),
         axes=dict(widget_type="LineEdit", label="Image Axes"),
-        label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
+        label_nn=dict(
+            widget_type="Label", label="<br><b>Neural Network Prediction:</b>"
+        ),
         model_type=dict(
             widget_type="RadioButtons",
             label="Model Type",
@@ -566,7 +568,9 @@ def plugin_wrapper():
             layers.append(
                 (
                     labels,
-                    dict(name="StarDist labels", scale=scale_out, opacity=0.5, **lkwargs),
+                    dict(
+                        name="StarDist labels", scale=scale_out, opacity=0.5, **lkwargs
+                    ),
                     "labels",
                 )
             )
@@ -728,7 +732,9 @@ def plugin_wrapper():
                 axes, image, err = getattr(self.args, "image_axes", (None, None, None))
                 widgets_valid(
                     plugin.axes,
-                    valid=(valid or (image is None and (axes is None or len(axes) == 0))),
+                    valid=(
+                        valid or (image is None and (axes is None or len(axes) == 0))
+                    ),
                 )
                 if (
                     valid
@@ -780,7 +786,10 @@ def plugin_wrapper():
                         "no tiling"
                         if n_tiles is None
                         else "\n".join(
-                            [f"{t}: {s}" for t, s in zip(n_tiles, get_data(image).shape)]
+                            [
+                                f"{t}: {s}"
+                                for t, s in zip(n_tiles, get_data(image).shape)
+                            ]
                         )
                     )
                     return n_tiles
@@ -802,7 +811,9 @@ def plugin_wrapper():
                     if input_scale is None:
                         plugin.input_scale.tooltip = "no scaling"
                     elif isinstance(input_scale, numbers.Number):
-                        plugin.input_scale.tooltip = f"{input_scale} for all spatial axes"
+                        plugin.input_scale.tooltip = (
+                            f"{input_scale} for all spatial axes"
+                        )
                     else:
                         assert len(input_scale) == len(get_data(image).shape)
                         plugin.input_scale.tooltip = "\n".join(
@@ -959,11 +970,15 @@ def plugin_wrapper():
     # ensure that percentile low < percentile high
     @change_handler(plugin.perc_low)
     def _perc_low_change():
-        plugin.perc_high.value = max(plugin.perc_low.value + 0.01, plugin.perc_high.value)
+        plugin.perc_high.value = max(
+            plugin.perc_low.value + 0.01, plugin.perc_high.value
+        )
 
     @change_handler(plugin.perc_high)
     def _perc_high_change():
-        plugin.perc_low.value = min(plugin.perc_low.value, plugin.perc_high.value - 0.01)
+        plugin.perc_low.value = min(
+            plugin.perc_low.value, plugin.perc_high.value - 0.01
+        )
 
     @change_handler(plugin.norm_axes)
     def _norm_axes_change(value: str):
@@ -986,7 +1001,9 @@ def plugin_wrapper():
     @change_handler(plugin.model_type, init=False)
     def _model_type_change(model_type: Union[str, type]):
         selected = widget_for_modeltype[model_type]
-        for w in set((plugin.model2d, plugin.model3d, plugin.model_folder)) - {selected}:
+        for w in set((plugin.model2d, plugin.model3d, plugin.model_folder)) - {
+            selected
+        }:
             w.hide()
         selected.show()
         # trigger _model_change
@@ -997,7 +1014,7 @@ def plugin_wrapper():
     # -> triggered by _model_type_change
     @change_handler(plugin.model2d, plugin.model3d, init=False)
     def _model_change(model_name: str):
-        model_class = StarDist2D if Signal.sender() is plugin.model2d else StarDist3D
+        model_class = plugin.model_type.value
         key = model_class, model_name
 
         if key not in model_configs:
