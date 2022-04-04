@@ -54,7 +54,11 @@ def surface_from_polys(polys):
 def plugin_wrapper():
     # delay imports until plugin is requested by user
     # -> especially those importing tensorflow (csbdeep.models.*, stardist.models.*)
-    from csbdeep.models.pretrained import get_model_folder, get_registered_models
+    from csbdeep.models.pretrained import (
+        get_model_details,
+        get_model_folder,
+        get_registered_models,
+    )
     from csbdeep.utils import (
         _raise,
         axes_check_and_normalize,
@@ -102,7 +106,7 @@ def plugin_wrapper():
     # -------------------------------------------------------------------------
 
     _models, _aliases = {}, {}
-    models_reg = {}
+    models_reg, models_reg_public = {}, {}
     for cls in (StarDist2D, StarDist3D):
         # get available models for class
         _models[cls], _aliases[cls] = get_registered_models(cls)
@@ -110,6 +114,15 @@ def plugin_wrapper():
         models_reg[cls] = [
             ((_aliases[cls][m][0] if len(_aliases[cls][m]) > 0 else m), m)
             for m in _models[cls]
+        ]
+        # keys of registered (i.e. pre-trained) models that are "public",
+        # i.e. transmitting their names for analytics is safe (not personally identifiable)
+        models_reg_public[cls] = [
+            key
+            for name, key in models_reg[cls]
+            if get_model_details(cls, key)[2]["url"].startswith(
+                "https://github.com/stardist/stardist-models/releases/"
+            )
         ]
 
     model_configs = dict()
@@ -133,6 +146,10 @@ def plugin_wrapper():
             return model_class(None, name=path.name, basedir=str(path.parent))
         else:
             return model_type.from_pretrained(model)
+
+    # -------------------------------------------------------------------------
+
+    from ._analytics import consent_event, launch_event, run_event
 
     # -------------------------------------------------------------------------
 
@@ -281,6 +298,15 @@ def plugin_wrapper():
             text="Set optimized postprocessing thresholds (for selected model)",
         ),
         defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
+        label_analytics=dict(
+            widget_type="Label",
+            label="<b>Analytics:</b>",
+        ),
+        analytics=dict(
+            widget_type="CheckBox",
+            text="Share anonymous usage data",
+            value=False,
+        ),
         progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
         persist=True,
@@ -312,6 +338,8 @@ def plugin_wrapper():
         cnn_output,
         set_thresholds,
         defaults_button,
+        label_analytics,
+        analytics,
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
@@ -347,7 +375,7 @@ def plugin_wrapper():
             )  # relevant axes present in input image
             assert len(axes_norm) > 0
             # always jointly normalize channels for RGB images
-            if ("C" in axes and image.rgb == True) and ("C" not in axes_norm):
+            if ("C" in axes and image.rgb is True) and ("C" not in axes_norm):
                 axes_norm = axes_norm + "C"
                 warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
@@ -369,6 +397,31 @@ def plugin_wrapper():
             #         # normalize channels independently
             #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low, perc_high, axis=_axis)
+
+        if analytics:
+            try:
+                run_event(
+                    model,
+                    model_selected,
+                    models_reg,
+                    models_reg_public,
+                    x.shape,
+                    axes,
+                    perc_low,
+                    perc_high,
+                    norm_image,
+                    input_scale,
+                    n_tiles,
+                    prob_thresh,
+                    nms_thresh,
+                    cnn_output,
+                    norm_axes,
+                    output_type={t.value: t.name for t in Output}[output_type],
+                    timelapse={t.value: t.name for t in TimelapseLabels}[timelapse_opts],
+                )
+            except Exception as e:
+                if DEBUG:
+                    raise e
 
         # TODO: progress bar (labels) often don't show up. events not processed?
         if "T" in axes:
@@ -616,6 +669,7 @@ def plugin_wrapper():
     plugin.n_tiles.value = DEFAULTS["n_tiles"]
     plugin.input_scale.value = DEFAULTS["input_scale"]
     plugin.label_head.value = '<small>Star-convex object detection for 2D and 3D images.<br>If you are using this in your research please <a href="https://github.com/stardist/stardist#how-to-cite" style="color:gray;">cite us</a>.</small><br><br><tt><a href="https://stardist.net" style="color:gray;">https://stardist.net</a></tt>'
+    plugin.label_analytics.value = '<small>Help improve this plugin by sharing usage data.<br></small><a href="https://github.com/stardist/stardist-napari/pull/12" style="color:gray;">What is shared and why.</a>'
 
     # make labels prettier (https://doc.qt.io/qt-5/qsizepolicy.html#Policy-enum)
     for w in (plugin.label_head, plugin.label_nn, plugin.label_nms, plugin.label_adv):
@@ -1179,6 +1233,16 @@ def plugin_wrapper():
         for k, v in DEFAULTS.items():
             getattr(plugin, k).value = v
 
+    # analytics
+    @change_handler(plugin.analytics, init=True)
+    def _analytics_change():
+        widgets_inactive(plugin.label_analytics, active=(not plugin.analytics.value))
+        try:
+            consent_event(plugin.analytics.value)
+        except Exception as e:
+            if DEBUG:
+                raise e
+
     # -------------------------------------------------------------------------
 
     # allow some widgets to shrink because their size depends on user input
@@ -1188,6 +1252,7 @@ def plugin_wrapper():
     plugin.timelapse_opts.native.setMinimumWidth(240)
 
     plugin.label_head.native.setOpenExternalLinks(True)
+    plugin.label_analytics.native.setOpenExternalLinks(True)
     # make reset button smaller
     # plugin.defaults_button.native.setMaximumWidth(150)
 
@@ -1206,5 +1271,12 @@ def plugin_wrapper():
 
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
+
+    if plugin.analytics.value:
+        try:
+            launch_event()
+        except Exception as e:
+            if DEBUG:
+                raise e
 
     return plugin
