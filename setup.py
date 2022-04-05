@@ -50,4 +50,7 @@ setup(
         "napari>=0.4.13",
         "magicgui>=0.4.0",
     ],
+    extras_require={
+        "test": ["pytest", "pytest-qt", "pyqt5"],
+    },
 )
