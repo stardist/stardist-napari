@@ -28,6 +28,7 @@ from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
+from . import DEBUG
 
 def surface_from_polys(polys):
     from stardist.geometry import dist_to_coord3D
@@ -66,14 +67,6 @@ def plugin_wrapper():
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
 
-    DEBUG = os.environ.get("STARDIST_NAPARI_DEBUG", "").lower() in (
-        "y",
-        "yes",
-        "t",
-        "true",
-        "on",
-        "1",
-    )
 
     def get_data(image):
         image = image.data[0] if image.multiscale else image.data
