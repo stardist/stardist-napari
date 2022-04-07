@@ -315,7 +315,9 @@ def plugin_wrapper():
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
-        model = get_model(*model_selected)
+        model = get_model(
+            model_type, {StarDist2D: model2d, StarDist3D: model3d}[model_type]
+        )
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
 
