@@ -18,8 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-
       - uses: ./.github/actions/test
         with:
           python-version: ${{ matrix.python-version }}
-          install-packages: "'.[test]'"
+          install-packages: "'stardist-napari[test]'"
+          # install-packages: "'.[test]'"

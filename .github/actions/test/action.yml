@@ -31,6 +31,7 @@ runs:
         python -m pip install --upgrade pip wheel setuptools
         python -m pip install ${{ inputs.install-packages }}
 
+    # run tests inside the installed stardist_napari package
     - name: Find test directory
       shell: bash
       run: |
