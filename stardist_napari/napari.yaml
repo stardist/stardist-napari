@@ -4,16 +4,16 @@ contributions:
   commands:
   - id: stardist-napari.widget
     title: Create StarDist widget
-    python_name: stardist_napari.make_dock_widget
+    python_name: stardist_napari:make_dock_widget
   - id: stardist-napari.data.nuclei_2d
     title: Nuclei (2D) sample
-    python_name: stardist_napari.data:_test_image_nuclei_2d
+    python_name: stardist_napari._sample_data:_test_image_nuclei_2d
   - id: stardist-napari.data.he_2d
     title: H&E Nuclei (2D RGB) sample
-    python_name: stardist_napari.data:_test_image_he_2d
+    python_name: stardist_napari._sample_data:_test_image_he_2d
   - id: stardist-napari.data.nuclei_3d
     title: Nuclei (3D) sample
-    python_name: stardist_napari.data:_test_image_nuclei_3d
+    python_name: stardist_napari._sample_data:_test_image_nuclei_3d
   widgets:
   - command: stardist-napari.widget
     display_name: StarDist

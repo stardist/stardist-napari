@@ -19,7 +19,9 @@ def nuclei_2d():
 
 @pytest.fixture(scope="session")
 def nuclei_3d():
-    return napari.layers.Image(data.test_image_nuclei_3d(), name="nuclei_3d")
+    img = data.test_image_nuclei_3d()
+    img = img[:, 14:-14, 12:-12]  # make smaller to speed up tests
+    return napari.layers.Image(img, name="nuclei_3d")
 
 
 @pytest.fixture(scope="session")
