@@ -13,6 +13,10 @@ jobs:
       matrix:
         platform: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.7', '3.8', '3.9', '3.10']
+        exclude:
+            # no wheels yet
+          - platform: macos-latest
+            python-version: '3.10'
 
     steps:
       - uses: actions/checkout@v2
