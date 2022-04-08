@@ -1,8 +1,8 @@
-name: Test
+name: Test (PyPI)
 
 on:
-  push:
-  pull_request:
+  schedule:
+    - cron: "0 18 * * *"
 
 jobs:
   test:
@@ -19,3 +19,4 @@ jobs:
       - uses: ./.github/actions/test
         with:
           python-version: ${{ matrix.python-version }}
+          install-packages: "'stardist-napari[test]'"
