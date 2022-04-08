@@ -3,7 +3,7 @@ name: 'Run tests'
 inputs:
   python-version:
     required: true
-  install-package:
+  install-packages:
     required: true
 
 runs:
@@ -29,9 +29,14 @@ runs:
       shell: bash
       run: |
         python -m pip install --upgrade pip wheel setuptools
-        python -m pip install "${{ inputs.install-package }}"
+        python -m pip install ${{ inputs.install-packages }}
+
+    - name: Find test directory
+      shell: bash
+      run: |
+        python -W ignore -c "import stardist_napari; print(f'pytest_dir={stardist_napari.__path__[0]}')" >> $GITHUB_ENV
 
     - name: Test with pytest
       uses: GabrielBB/xvfb-action@v1
       with:
-        run: pytest -v --color=yes --durations=0
+        run: python -m pytest -v --color=yes --durations=0 ${{ env.pytest_dir }}
