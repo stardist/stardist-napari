@@ -41,6 +41,7 @@ setup(
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Framework :: napari",
     ],
     install_requires=[
@@ -50,4 +51,7 @@ setup(
         "napari>=0.4.13",
         "magicgui>=0.4.0",
     ],
+    extras_require={
+        "test": ["pytest", "pytest-qt", "napari[pyqt]>=0.4.13"],
+    },
 )

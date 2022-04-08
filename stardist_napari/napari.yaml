@@ -4,7 +4,7 @@ contributions:
   commands:
   - id: stardist-napari.widget
     title: Create StarDist widget
-    python_name: stardist_napari._dock_widget:plugin_wrapper
+    python_name: stardist_napari:make_dock_widget
   - id: stardist-napari.data.nuclei_2d
     title: Nuclei (2D) sample
     python_name: stardist_napari._sample_data:_test_image_nuclei_2d

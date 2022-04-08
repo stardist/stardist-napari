@@ -20,6 +20,13 @@ from warnings import warn
 
 import napari
 import numpy as np
+from csbdeep.utils import (
+    _raise,
+    axes_check_and_normalize,
+    axes_dict,
+    load_json,
+    normalize,
+)
 from magicgui import magicgui
 from magicgui import widgets as mw
 from magicgui.application import use_app
@@ -27,6 +34,74 @@ from napari.qt.threading import thread_worker
 from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
+
+from . import DEBUG
+
+# -------------------------------------------------------------------------
+
+CUSTOM_MODEL = "CUSTOM_MODEL"
+
+
+class Output(Enum):
+    Labels = "Label Image"
+    Polys = "Polygons / Polyhedra"
+    Both = "Both"
+
+
+output_choices = [Output.Labels.value, Output.Polys.value, Output.Both.value]
+
+
+class TimelapseLabels(Enum):
+    Match = "Match to previous frame (via overlap)"
+    Unique = "Unique through time"
+    Separate = "Separate per frame (no processing)"
+
+
+timelapse_opts = [
+    TimelapseLabels.Match.value,
+    TimelapseLabels.Unique.value,
+    TimelapseLabels.Separate.value,
+]
+
+
+# -------------------------------------------------------------------------
+
+
+def get_model_config_and_thresholds(path):
+    config = load_json(str(path / "config.json"))
+    thresholds = None
+    try:
+        # not all models have associated thresholds
+        thresholds = load_json(str(path / "thresholds.json"))
+    except FileNotFoundError:
+        pass
+    return config, thresholds
+
+
+def get_data(image):
+    image = image.data[0] if image.multiscale else image.data
+    # enforce dense numpy array in case we are given a dask array etc
+    return np.asarray(image)
+
+
+def change_handler(*widgets, init=True, debug=DEBUG):
+    def decorator_change_handler(handler):
+        @functools.wraps(handler)
+        def wrapper(*args):
+            source = Signal.sender()
+            emitter = Signal.current_emitter()
+            if debug:
+                # print(f"{emitter}: {source} = {args!r}")
+                print(f"{str(emitter.name).upper()}: {source.name} = {args!r}")
+            return handler(*args)
+
+        for widget in widgets:
+            widget.changed.connect(wrapper)
+            if init:
+                widget.changed(widget.value)
+        return wrapper
+
+    return decorator_change_handler
 
 
 def surface_from_polys(polys):
@@ -51,53 +126,16 @@ def surface_from_polys(polys):
     return [np.array(vertices), np.array(faces), np.array(values)]
 
 
+# -------------------------------------------------------------------------
+
+
 def plugin_wrapper():
     # delay imports until plugin is requested by user
     # -> especially those importing tensorflow (csbdeep.models.*, stardist.models.*)
     from csbdeep.models.pretrained import get_model_folder, get_registered_models
-    from csbdeep.utils import (
-        _raise,
-        axes_check_and_normalize,
-        axes_dict,
-        load_json,
-        normalize,
-    )
     from stardist.matching import group_matching_labels
     from stardist.models import StarDist2D, StarDist3D
     from stardist.utils import abspath
-
-    DEBUG = os.environ.get("STARDIST_NAPARI_DEBUG", "").lower() in (
-        "y",
-        "yes",
-        "t",
-        "true",
-        "on",
-        "1",
-    )
-
-    def get_data(image):
-        image = image.data[0] if image.multiscale else image.data
-        # enforce dense numpy array in case we are given a dask array etc
-        return np.asarray(image)
-
-    def change_handler(*widgets, init=True, debug=DEBUG):
-        def decorator_change_handler(handler):
-            @functools.wraps(handler)
-            def wrapper(*args):
-                source = Signal.sender()
-                emitter = Signal.current_emitter()
-                if debug:
-                    # print(f"{emitter}: {source} = {args!r}")
-                    print(f"{str(emitter.name).upper()}: {source.name} = {args!r}")
-                return handler(*args)
-
-            for widget in widgets:
-                widget.changed.connect(wrapper)
-                if init:
-                    widget.changed(widget.value)
-            return wrapper
-
-        return decorator_change_handler
 
     # -------------------------------------------------------------------------
 
@@ -116,7 +154,6 @@ def plugin_wrapper():
     model_threshs = dict()
     model_selected = None
 
-    CUSTOM_MODEL = "CUSTOM_MODEL"
     model_type_choices = [
         ("2D", StarDist2D),
         ("3D", StarDist3D),
@@ -128,31 +165,13 @@ def plugin_wrapper():
         if model_type == CUSTOM_MODEL:
             path = Path(model)
             path.is_dir() or _raise(FileNotFoundError(f"{path} is not a directory"))
-            config = model_configs[(model_type, model)]
+            config = model_configs.get(
+                (model_type, model), get_model_config_and_thresholds(path)[0]
+            )
             model_class = StarDist2D if config["n_dim"] == 2 else StarDist3D
             return model_class(None, name=path.name, basedir=str(path.parent))
         else:
             return model_type.from_pretrained(model)
-
-    # -------------------------------------------------------------------------
-
-    class Output(Enum):
-        Labels = "Label Image"
-        Polys = "Polygons / Polyhedra"
-        Both = "Both"
-
-    output_choices = [Output.Labels.value, Output.Polys.value, Output.Both.value]
-
-    class TimelapseLabels(Enum):
-        Match = "Match to previous frame (via overlap)"
-        Unique = "Unique through time"
-        Separate = "Separate per frame (no processing)"
-
-    timelapse_opts = [
-        TimelapseLabels.Match.value,
-        TimelapseLabels.Unique.value,
-        TimelapseLabels.Separate.value,
-    ]
 
     # -------------------------------------------------------------------------
 
@@ -315,7 +334,12 @@ def plugin_wrapper():
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
-        model = get_model(*model_selected)
+        model = get_model(
+            model_type,
+            {StarDist2D: model2d, StarDist3D: model3d, CUSTOM_MODEL: model_folder}[
+                model_type
+            ],
+        )
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
 
@@ -571,8 +595,10 @@ def plugin_wrapper():
                 )
             )
         if output_type in (Output.Polys.value, Output.Both.value):
-            n_objects = len(polys["points"])
             if isinstance(model, StarDist3D):
+                if "T" in axes:
+                    raise NotImplementedError("Polyhedra output for 3D timelapse")
+                n_objects = len(polys["points"])
                 surface = surface_from_polys(polys)
                 layers.append(
                     (
@@ -1008,12 +1034,10 @@ def plugin_wrapper():
 
             def _process_model_folder(path):
                 try:
-                    model_configs[key] = load_json(str(path / "config.json"))
-                    try:
-                        # not all models have associated thresholds
-                        model_threshs[key] = load_json(str(path / "thresholds.json"))
-                    except FileNotFoundError:
-                        pass
+                    _config, _thresholds = get_model_config_and_thresholds(path)
+                    model_configs[key] = _config
+                    if _thresholds is not None:
+                        model_threshs[key] = _thresholds
                 finally:
                     select_model(key)
                     plugin.progress_bar.hide()
