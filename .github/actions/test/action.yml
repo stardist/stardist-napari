@@ -41,4 +41,6 @@ runs:
     - name: Test with pytest
       uses: GabrielBB/xvfb-action@v1
       with:
-        run: python -m pytest -v --color=yes --durations=0 ${{ env.pytest_dir }}
+        run: |
+          cd "${{ env.pytest_dir }}"
+          python -m pytest -v --color=yes --durations=0
