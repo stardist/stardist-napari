@@ -35,7 +35,7 @@ runs:
     - name: Find test directory
       shell: bash
       run: |
-        python -W ignore -c "import stardist_napari; print(f'pytest_dir={stardist_napari.__path__[0]}')" >> $GITHUB_ENV
+        python -W ignore -c "import sys; sys.path.remove(''); import stardist_napari; print(f'pytest_dir={stardist_napari.__path__[0]}')" >> $GITHUB_ENV
 
     # run tests inside the installed stardist_napari package
     - name: Test with pytest
