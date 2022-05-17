@@ -363,9 +363,8 @@ def plugin_wrapper():
                 raise NotImplementedError("not supported yet: fov of multiscale images")
             if model.config.n_dim == 3:
                 raise NotImplementedError("not supported yet: fov with 3D models")
-            if "T" in axes:
-                raise NotImplementedError("not supported yet: fov with timelapse")
             if viewer.dims.ndisplay != 2:
+                # TODO: disable FOV checkbox when 3D viewer mode is enabled
                 raise NotImplementedError(
                     "not supported: fov requires exactly 2 visible dimensions"
                 )
@@ -376,15 +375,26 @@ def plugin_wrapper():
             #     axes,
             # ):
             #     print(f"{a}({sh}): {top_left}-{bottom_right}")
+
+            def get_slice_not_displayed(i):
+                return (
+                    # use visible/selected frame for timelapse
+                    slice(viewer.dims.current_step[i], 1 + viewer.dims.current_step[i])
+                    if axes[i] == "T"
+                    # use entire dimsension otherwise (multi-channel image)
+                    else slice(0, x.shape[i])
+                )
+
             sl = tuple(
-                slice(fr, to) if i in viewer.dims.displayed else slice(0, sh)
-                for i, (fr, to, sh) in enumerate(
-                    zip(image.corner_pixels[0], image.corner_pixels[1], x.shape)
+                slice(fr, to)
+                if i in viewer.dims.displayed
+                else get_slice_not_displayed(i)
+                for i, (fr, to) in enumerate(
+                    zip(image.corner_pixels[0], image.corner_pixels[1])
                 )
             )
             origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
-            print(model.config)
-            print(origin_in_dict)
+            # print(sl)
             x = x[sl]
             # assert False
         else:
