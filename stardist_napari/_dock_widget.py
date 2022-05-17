@@ -312,7 +312,7 @@ def plugin_wrapper():
         call_button=True,
     )
     def plugin(
-        viewer: napari.Viewer,
+        viewer: Union[napari.Viewer, None],
         label_head,
         image: napari.layers.Image,
         axes,
@@ -353,20 +353,34 @@ def plugin_wrapper():
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 
+        # axes and x correspond to the original (and immutable) order of image dimensions
+        # -> i.e. not affected by changing the viewer dimensions ordering, etc.
+
         if fov_image:
+            if viewer is None:
+                raise RuntimeError("viewer is None")
             if image.multiscale:
                 raise NotImplementedError("not supported yet: fov of multiscale images")
             if model.config.n_dim == 3:
                 raise NotImplementedError("not supported yet: fov with 3D models")
             if "T" in axes:
                 raise NotImplementedError("not supported yet: fov with timelapse")
-            # for sh, top_left, bottom_right in zip(
-            #     x.shape, image.corner_pixels[0], image.corner_pixels[1]
+            if viewer.dims.ndisplay != 2:
+                raise NotImplementedError(
+                    "not supported: fov requires exactly 2 visible dimensions"
+                )
+            # for sh, top_left, bottom_right, a in zip(
+            #     x.shape,
+            #     image.corner_pixels[0],
+            #     image.corner_pixels[1],
+            #     axes,
             # ):
-            #     print(sh, top_left, bottom_right)
+            #     print(f"{a}({sh}): {top_left}-{bottom_right}")
             sl = tuple(
-                slice(fr, to)
-                for fr, to in zip(image.corner_pixels[0], image.corner_pixels[1])
+                slice(fr, to) if i in viewer.dims.displayed else slice(0, sh)
+                for i, (fr, to, sh) in enumerate(
+                    zip(image.corner_pixels[0], image.corner_pixels[1], x.shape)
+                )
             )
             origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
             print(model.config)
@@ -392,6 +406,7 @@ def plugin_wrapper():
                 f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
             )
             # TODO: adjust image.scale according to shuffled axes
+            # TODO: undo output axes perumutation, such that outputs can be overlayed with inputs in the viewer
 
         if norm_image:
             axes_norm = axes_check_and_normalize(norm_axes)
