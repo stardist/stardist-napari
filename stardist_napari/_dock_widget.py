@@ -382,13 +382,14 @@ def plugin_wrapper():
                 )
 
             def get_slice_not_displayed(i):
-                return (
-                    # use visible/selected frame for timelapse
-                    slice(viewer.dims.current_step[i], 1 + viewer.dims.current_step[i])
-                    if axes[i] == "T"
-                    # use entire dimsension otherwise (multi-channel image)
-                    else slice(0, x.shape[i])
-                )
+                # if timelapse, return visible/selected frame
+                if axes[i] == "T":
+                    return slice(
+                        viewer.dims.current_step[i], 1 + viewer.dims.current_step[i]
+                    )
+                # otherwise (multi-channel image) return entire dimension
+                else:
+                    return slice(0, x.shape[i])
 
             corner_pixels = (
                 corner_pixels_multiscale(image)
@@ -404,14 +405,15 @@ def plugin_wrapper():
             )
             origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
 
-            # for sh, top_left, bottom_right, a in zip(
-            #     x.shape,
-            #     corner_pixels[0],
-            #     corner_pixels[1],
-            #     axes,
-            # ):
-            #     print(f"{a}({sh}): {top_left}-{bottom_right}")
-            # print(sl)
+            if DEBUG:
+                for sh, top_left, bottom_right, a in zip(
+                    x.shape,
+                    corner_pixels[0],
+                    corner_pixels[1],
+                    axes,
+                ):
+                    print(f"{a}({sh}): {top_left}-{bottom_right}")
+                print(sl)
 
             x = x[sl]
         else:
