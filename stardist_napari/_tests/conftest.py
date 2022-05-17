@@ -2,7 +2,7 @@ import napari
 import pytest
 from stardist import data
 
-from .. import make_dock_widget
+from stardist_napari import make_dock_widget
 
 
 @pytest.fixture(scope="function")
