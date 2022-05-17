@@ -4,11 +4,11 @@ import pytest
 from scipy.ndimage import rotate
 from stardist.models import StarDist2D, StarDist3D
 
-from .._dock_widget import CUSTOM_MODEL, Output, TimelapseLabels
+from stardist_napari._dock_widget import CUSTOM_MODEL, Output, TimelapseLabels
 
 
 def test_fluo_2d(plugin, nuclei_2d):
-    kwargs = dict(viewer=None, image=nuclei_2d, axes="YX")
+    kwargs = dict(viewer=None, image=nuclei_2d, axes="YX", model_type=StarDist2D, model2d='2D_versatile_fluo')
 
     for output_type, num_out in (
         (Output.Labels.value, 1),
@@ -31,7 +31,7 @@ def test_fluo_2d(plugin, nuclei_2d):
 
 
 def test_fluo_3d(plugin, nuclei_3d):
-    kwargs = dict(viewer=None, image=nuclei_3d, axes="ZYX", model_type=StarDist3D)
+    kwargs = dict(viewer=None, image=nuclei_3d, axes="ZYX", model_type=StarDist3D, model3d='3D_demo')
 
     for output_type, num_out in (
         (Output.Labels.value, 1),
@@ -77,7 +77,7 @@ def test_timelapse_2d(plugin, nuclei_2d):
         axis=0,
     )
     timelapse = napari.layers.Image(timelapse, name="timelapse")
-    kwargs = dict(viewer=None, image=timelapse, axes="TYX")
+    kwargs = dict(viewer=None, image=timelapse, axes="TYX", model_type=StarDist2D, model2d='2D_versatile_fluo')
 
     for t in TimelapseLabels:
         plugin(**kwargs, timelapse_opts=t.value)
@@ -92,7 +92,7 @@ def test_timelapse_2d(plugin, nuclei_2d):
 def test_timelapse_3d(plugin, nuclei_3d):
     timelapse = np.stack([np.roll(nuclei_3d.data, n) for n in (0, 10)], axis=0)
     timelapse = napari.layers.Image(timelapse, name="timelapse")
-    kwargs = dict(viewer=None, image=timelapse, axes="TZYX", model_type=StarDist3D)
+    kwargs = dict(viewer=None, image=timelapse, axes="TZYX", model_type=StarDist3D, model3d='3D_demo')
 
     with pytest.raises(NotImplementedError):
         plugin(**kwargs, output_type=Output.Polys.value)
@@ -110,7 +110,7 @@ def test_timelapse_3d(plugin, nuclei_3d):
 
 
 def test_he_2d(plugin, he_2d):
-    kwargs = dict(viewer=None, image=he_2d, axes="YXC", model2d="2D_versatile_he")
+    kwargs = dict(viewer=None, image=he_2d, axes="YXC", model_type=StarDist2D, model2d="2D_versatile_he")
 
     out = plugin(**kwargs)
     assert len(out) == 2
