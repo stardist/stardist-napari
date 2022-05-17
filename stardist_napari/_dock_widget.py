@@ -1,9 +1,10 @@
 """
 TODO:
 - ability to cancel running stardist computation
-- run only on field of view
+- run only on field of view (needs testing)
   - https://forum.image.sc/t/how-could-i-get-the-viewed-coordinates/49709
   - https://napari.zulipchat.com/#narrow/stream/212875-general/topic/corner.20pixels.20and.20dims.20displayed
+  - https://github.com/napari/napari/issues/2487
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
 - try progress bar via @thread_workers
@@ -180,7 +181,7 @@ def plugin_wrapper():
         model2d=models_reg[StarDist2D][0][1],
         model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
-        fov_image=True,
+        fov_image=False,
         input_scale="None",
         perc_low=1.0,
         perc_high=99.8,
@@ -205,7 +206,7 @@ def plugin_wrapper():
         axes=dict(widget_type="LineEdit", label="Image Axes"),
         fov_image=dict(
             widget_type="CheckBox",
-            text="Field of view only",
+            text="Predict on field of view only",
             value=DEFAULTS["fov_image"],
         ),
         label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
@@ -359,22 +360,25 @@ def plugin_wrapper():
         if fov_image:
             if viewer is None:
                 raise RuntimeError("viewer is None")
-            if image.multiscale:
-                raise NotImplementedError("not supported yet: fov of multiscale images")
             if model.config.n_dim == 3:
-                raise NotImplementedError("not supported yet: fov with 3D models")
+                raise NotImplementedError(
+                    "field of view prediction only supported for 2D models at the moment"
+                )
             if viewer.dims.ndisplay != 2:
                 # TODO: disable FOV checkbox when 3D viewer mode is enabled
                 raise NotImplementedError(
-                    "not supported: fov requires exactly 2 visible dimensions"
+                    "field of view prediction only supported in 2D display mode"
                 )
-            # for sh, top_left, bottom_right, a in zip(
-            #     x.shape,
-            #     image.corner_pixels[0],
-            #     image.corner_pixels[1],
-            #     axes,
-            # ):
-            #     print(f"{a}({sh}): {top_left}-{bottom_right}")
+
+            def corner_pixels_multiscale(layer):
+                # layer.corner_pixels are with respect to the currently used resolution level (layer.data_level)
+                # -> convert to reference highest resolution level (layer.data[0]), which is used by stardist
+                factor = layer.downsample_factors[layer.data_level]
+                scaled_corner = np.round(layer.corner_pixels * factor).astype(int)
+                shape_max = layer.data[0].shape
+                for i in range(len(shape_max)):
+                    scaled_corner[:, i] = np.clip(scaled_corner[:, i], 0, shape_max[i])
+                return scaled_corner
 
             def get_slice_not_displayed(i):
                 return (
@@ -385,18 +389,30 @@ def plugin_wrapper():
                     else slice(0, x.shape[i])
                 )
 
+            corner_pixels = (
+                corner_pixels_multiscale(image)
+                if image.multiscale
+                else image.corner_pixels
+            )
+
             sl = tuple(
                 slice(fr, to)
                 if i in viewer.dims.displayed
                 else get_slice_not_displayed(i)
-                for i, (fr, to) in enumerate(
-                    zip(image.corner_pixels[0], image.corner_pixels[1])
-                )
+                for i, (fr, to) in enumerate(zip(corner_pixels[0], corner_pixels[1]))
             )
             origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
+
+            # for sh, top_left, bottom_right, a in zip(
+            #     x.shape,
+            #     corner_pixels[0],
+            #     corner_pixels[1],
+            #     axes,
+            # ):
+            #     print(f"{a}({sh}): {top_left}-{bottom_right}")
             # print(sl)
+
             x = x[sl]
-            # assert False
         else:
             origin_in_dict = {}
 
