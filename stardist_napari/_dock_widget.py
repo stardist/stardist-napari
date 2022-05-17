@@ -180,6 +180,7 @@ def plugin_wrapper():
         model2d=models_reg[StarDist2D][0][1],
         model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
+        fov_image=True,
         input_scale="None",
         perc_low=1.0,
         perc_high=99.8,
@@ -202,6 +203,11 @@ def plugin_wrapper():
         ),
         image=dict(label="Input Image"),
         axes=dict(widget_type="LineEdit", label="Image Axes"),
+        fov_image=dict(
+            widget_type="CheckBox",
+            text="Field of view only",
+            value=DEFAULTS["fov_image"],
+        ),
         label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
         model_type=dict(
             widget_type="RadioButtons",
@@ -310,6 +316,7 @@ def plugin_wrapper():
         label_head,
         image: napari.layers.Image,
         axes,
+        fov_image,
         label_nn,
         model_type,
         model2d,
@@ -343,9 +350,31 @@ def plugin_wrapper():
         if model._is_multiclass():
             warn("multi-class mode not supported yet, ignoring classification output")
 
-        lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if fov_image:
+            if image.multiscale:
+                raise NotImplementedError("not supported yet: fov of multiscale images")
+            if model.config.n_dim == 3:
+                raise NotImplementedError("not supported yet: fov with 3D models")
+            if "T" in axes:
+                raise NotImplementedError("not supported yet: fov with timelapse")
+            # for sh, top_left, bottom_right in zip(
+            #     x.shape, image.corner_pixels[0], image.corner_pixels[1]
+            # ):
+            #     print(sh, top_left, bottom_right)
+            sl = tuple(
+                slice(fr, to)
+                for fr, to in zip(image.corner_pixels[0], image.corner_pixels[1])
+            )
+            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
+            print(model.config)
+            print(origin_in_dict)
+            x = x[sl]
+            # assert False
+        else:
+            origin_in_dict = {}
 
         if input_scale is not None:
             if isinstance(input_scale, numbers.Number):
@@ -538,6 +567,7 @@ def plugin_wrapper():
         # determine scale for output axes
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
+        origin_out = [origin_in_dict.get(a, 0) for a in axes_out]
 
         layers = []
         if cnn_output:
@@ -555,8 +585,8 @@ def plugin_wrapper():
             # small translation correction if grid > 1 (since napari centers objects)
             # TODO: this doesn't look correct
             _translate = [
-                0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
-                for a, s in zip(axes_out, scale_out)
+                o + 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
+                for a, s, o in zip(axes_out, scale_out, origin_out)
             ]
 
             layers.append(
@@ -566,7 +596,6 @@ def plugin_wrapper():
                         name="StarDist distances",
                         scale=[1] + _scale,
                         translate=[0] + _translate,
-                        **lkwargs,
                     ),
                     "image",
                 )
@@ -578,7 +607,6 @@ def plugin_wrapper():
                         name="StarDist probability",
                         scale=_scale,
                         translate=_translate,
-                        **lkwargs,
                     ),
                     "image",
                 )
@@ -590,7 +618,12 @@ def plugin_wrapper():
             layers.append(
                 (
                     labels,
-                    dict(name="StarDist labels", scale=scale_out, opacity=0.5, **lkwargs),
+                    dict(
+                        name="StarDist labels",
+                        scale=scale_out,
+                        opacity=0.5,
+                        translate=origin_out,
+                    ),
                     "labels",
                 )
             )
@@ -608,7 +641,7 @@ def plugin_wrapper():
                             contrast_limits=(0, surface[-1].max()),
                             scale=scale_out,
                             colormap=label_colormap(n_objects),
-                            **lkwargs,
+                            translate=origin_out,
                         ),
                         "surface",
                     )
@@ -628,7 +661,7 @@ def plugin_wrapper():
                             edge_width=0.75,
                             edge_color="yellow",
                             face_color=[0, 0, 0, 0],
-                            **lkwargs,
+                            translate=origin_out,
                         ),
                         "shapes",
                     )
