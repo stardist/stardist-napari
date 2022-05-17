@@ -604,7 +604,9 @@ def plugin_wrapper():
 
         if output_type in (Output.Labels.value, Output.Both.value):
 
-            if model._is_multiclass():
+            if model._is_multiclass() and not (
+                isinstance(model, StarDist3D) and "T" in axes
+            ):
                 #     from skimage.measure import regionprops
                 #     prob, dist, prob_class = cnn_out
                 #     prob_class = np.expand_dims(prob,-1)*prob_class
@@ -614,6 +616,9 @@ def plugin_wrapper():
                 #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
 
                 labels_cls = np.zeros_like(labels)
+                for c in range(model.config.n_classes + 1):
+                    idx = (1 + np.where(polys["class_id"] == c)[0]).tolist()
+                    labels_cls[np.isin(labels, idx)] = c
 
                 layers.append(
                     (
@@ -638,9 +643,10 @@ def plugin_wrapper():
             )
 
         if output_type in (Output.Polys.value, Output.Both.value):
+            if isinstance(model, StarDist3D) and "T" in axes:
+                raise NotImplementedError("Polyhedra output for 3D timelapse")
+
             if isinstance(model, StarDist3D):
-                if "T" in axes:
-                    raise NotImplementedError("Polyhedra output for 3D timelapse")
                 n_objects = len(polys["points"])
                 surface = surface_from_polys(polys)
                 layers.append(
