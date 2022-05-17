@@ -334,8 +334,13 @@ def plugin_wrapper():
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
 
-        model = get_model(*model_selected)     
-        
+        model = get_model(
+            model_type,
+            {StarDist2D: model2d, StarDist3D: model3d, CUSTOM_MODEL: model_folder}[
+                model_type
+            ],
+        )
+
         lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
@@ -434,7 +439,6 @@ def plugin_wrapper():
             progress_bar.show()
             use_app().process_events()
 
-        
         # semantic output axes of predictions
         assert model._axes_out[-1] == "C"
         axes_out = list(model._axes_out[:-1])
@@ -461,9 +465,12 @@ def plugin_wrapper():
                 )
             )
 
-            labels, polys = tuple(zip(*res[0]))
-            cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
-            
+            if cnn_output:
+                labels, polys = tuple(zip(*res[0]))
+                cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
+            else:
+                labels, polys = res
+
             labels = np.asarray(labels)
 
             if len(polys) > 1:
@@ -530,9 +537,11 @@ def plugin_wrapper():
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
 
+        # constructing the actual napari layers
         layers = []
         if cnn_output:
             (labels, polys), cnn_out = pred
+            prob, dist = cnn_out[:2]
             dist = np.moveaxis(dist, -1, 0)
 
             assert len(model.config.grid) == len(model.config.axes) - 1
@@ -542,44 +551,77 @@ def plugin_wrapper():
                 s * grid_dict.get(a, 1) / input_scale_dict.get(a, 1)
                 for a, s in zip(axes_out, scale_out)
             ]
-            # small translation correction if grid > 1 (since napari centers objects)
-            _translate = [0.5*(grid_dict.get(a,1)-1) for a in axes_out]
-            
+
             # TODO: this doesn't look correct
             _translate = [
                 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
                 for a, s in zip(axes_out, scale_out)
             ]
-            
-            layers.append((dist, dict(name='StarDist distances',
-                                      scale=[1]+_scale, translate=[0]+_translate,
-                                      **lkwargs), 'image'))
-            layers.append((prob, dict(name='StarDist probability',
-                                      scale=_scale, translate=_translate,
-                                      **lkwargs), 'image'))
+
+            layers.append(
+                (
+                    dist,
+                    dict(
+                        name="StarDist distances",
+                        scale=[1] + _scale,
+                        translate=[0] + _translate,
+                        **lkwargs,
+                    ),
+                    "image",
+                )
+            )
+            layers.append(
+                (
+                    prob,
+                    dict(
+                        name="StarDist probability",
+                        scale=_scale,
+                        translate=_translate,
+                        **lkwargs,
+                    ),
+                    "image",
+                )
+            )
 
             if model._is_multiclass():
                 prob_class = np.moveaxis(cnn_out[-1], -1, 0)
-                layers.append((prob_class, dict(name='StarDist class probabilities',
-                                      scale=_scale, translate=_translate,
-                                      **lkwargs), 'image'))
-                                      
-        if output_type in (Output.Labels.value,Output.Both.value):
+                layers.append(
+                    (
+                        prob_class,
+                        dict(
+                            name="StarDist class probabilities",
+                            scale=_scale,
+                            translate=_translate,
+                            **lkwargs,
+                        ),
+                        "image",
+                    )
+                )
+        else:
+            labels, polys = pred
 
-            if model._is_multiclass():
-                from skimage.measure import regionprops
-                prob, dist, prob_class = cnn_out
-                prob_class = np.expand_dims(prob,-1)*prob_class
-                labels_cls = np.zeros_like(labels)
-                for r in regionprops(labels):
-                    mask = labels[r.slice]==r.label
-                    labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
-                layers.append((labels_cls, dict(name='StarDist class labels', visible=False, scale=scale_out, opacity=.5, **lkwargs), 'labels'))
+        if output_type in (Output.Labels.value, Output.Both.value):
 
-            layers.append((labels, dict(name='StarDist labels', scale=scale_out, opacity=.5, **lkwargs), 'labels'))
-        if output_type in (Output.Polys.value,Output.Both.value):
-            n_objects = len(polys['points'])
-        
+            # if model._is_multiclass():
+            #     from skimage.measure import regionprops
+            #     prob, dist, prob_class = cnn_out
+            #     prob_class = np.expand_dims(prob,-1)*prob_class
+            #     labels_cls = np.zeros_like(labels)
+            #     for r in regionprops(labels):
+            #         mask = labels[r.slice]==r.label
+            #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
+
+            #     layers.append((labels_cls, dict(name='StarDist class labels', visible=False, scale=scale_out, opacity=.5, **lkwargs), 'labels'))
+
+            layers.append(
+                (
+                    labels,
+                    dict(name="StarDist labels", scale=scale_out, opacity=0.5, **lkwargs),
+                    "labels",
+                )
+            )
+
+        if output_type in (Output.Polys.value, Output.Both.value):
             if isinstance(model, StarDist3D):
                 if "T" in axes:
                     raise NotImplementedError("Polyhedra output for 3D timelapse")
@@ -599,8 +641,6 @@ def plugin_wrapper():
                     )
                 )
             else:
-                # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
-                #       seems to be a known issue: https://github.com/napari/napari/issues/2015
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys["coord"], -1, -2)
                 layers.append(

@@ -8,7 +8,13 @@ from stardist_napari._dock_widget import CUSTOM_MODEL, Output, TimelapseLabels
 
 
 def test_fluo_2d(plugin, nuclei_2d):
-    kwargs = dict(viewer=None, image=nuclei_2d, axes="YX", model_type=StarDist2D, model2d='2D_versatile_fluo')
+    kwargs = dict(
+        viewer=None,
+        image=nuclei_2d,
+        axes="YX",
+        model_type=StarDist2D,
+        model2d="2D_versatile_fluo",
+    )
 
     for output_type, num_out in (
         (Output.Labels.value, 1),
@@ -33,7 +39,9 @@ def test_fluo_2d(plugin, nuclei_2d):
 
 
 def test_fluo_3d(plugin, nuclei_3d):
-    kwargs = dict(viewer=None, image=nuclei_3d, axes="ZYX", model_type=StarDist3D, model3d='3D_demo')
+    kwargs = dict(
+        viewer=None, image=nuclei_3d, axes="ZYX", model_type=StarDist3D, model3d="3D_demo"
+    )
 
     for output_type, num_out in (
         (Output.Labels.value, 1),
@@ -54,6 +62,8 @@ def test_fluo_3d(plugin, nuclei_3d):
     )
     assert len(out) == 4
 
+    return out, kwargs
+
 
 def test_custom_model_2d(plugin, nuclei_2d):
     from csbdeep.models.pretrained import get_model_folder
@@ -69,6 +79,8 @@ def test_custom_model_2d(plugin, nuclei_2d):
     assert np.allclose(labels1[0], labels2[0]) and labels1[1] == labels2[1]
     assert np.allclose(polys1[0], polys2[0]) and polys1[1] == polys2[1]
 
+    return kwargs
+
 
 def test_timelapse_2d(plugin, nuclei_2d):
     timelapse = np.stack(
@@ -79,7 +91,13 @@ def test_timelapse_2d(plugin, nuclei_2d):
         axis=0,
     )
     timelapse = napari.layers.Image(timelapse, name="timelapse")
-    kwargs = dict(viewer=None, image=timelapse, axes="TYX", model_type=StarDist2D, model2d='2D_versatile_fluo')
+    kwargs = dict(
+        viewer=None,
+        image=timelapse,
+        axes="TYX",
+        model_type=StarDist2D,
+        model2d="2D_versatile_fluo",
+    )
 
     for t in TimelapseLabels:
         plugin(**kwargs, timelapse_opts=t.value)
@@ -90,11 +108,19 @@ def test_timelapse_2d(plugin, nuclei_2d):
     out = plugin(**kwargs, n_tiles=(1, 2, 3))
     assert len(out) == 2
 
+    return out, kwargs
+
 
 def test_timelapse_3d(plugin, nuclei_3d):
     timelapse = np.stack([np.roll(nuclei_3d.data, n) for n in (0, 10)], axis=0)
     timelapse = napari.layers.Image(timelapse, name="timelapse")
-    kwargs = dict(viewer=None, image=timelapse, axes="TZYX", model_type=StarDist3D, model3d='3D_demo')
+    kwargs = dict(
+        viewer=None,
+        image=timelapse,
+        axes="TZYX",
+        model_type=StarDist3D,
+        model3d="3D_demo",
+    )
 
     with pytest.raises(NotImplementedError):
         plugin(**kwargs, output_type=Output.Polys.value)
@@ -110,23 +136,35 @@ def test_timelapse_3d(plugin, nuclei_3d):
     out = plugin(**kwargs, n_tiles=(1, 1, 2, 3))
     assert len(out) == 1
 
+    return out, kwargs
+
 
 def test_he_2d(plugin, he_2d):
-    kwargs = dict(viewer=None, image=he_2d, axes="YXC", model_type=StarDist2D, model2d="2D_versatile_he")
+    kwargs = dict(
+        viewer=None,
+        image=he_2d,
+        axes="YXC",
+        model_type=StarDist2D,
+        model2d="2D_versatile_he",
+    )
 
     out = plugin(**kwargs)
     assert len(out) == 2
 
+    return out, kwargs
 
 
 if __name__ == "__main__":
     from stardist import data
+
     from stardist_napari import make_dock_widget
 
-    plugin, img = make_dock_widget(), data.test_image_nuclei_2d() 
+    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
+    # out, kwargs = test_fluo_2d(plugin, img)
+    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
+    # out, kwargs = test_timelapse_2d(plugin, img)
+    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_3d())
+    # out, kwargs = test_fluo_3d(plugin, img)
 
-    out, kwargs = test_fluo_2d(plugin, img)
-
-
-
-
+    plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_3d())
+    out, kwargs = test_timelapse_3d(plugin, img)
