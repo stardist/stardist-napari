@@ -15,9 +15,7 @@ import os
 import time
 from enum import Enum
 from pathlib import Path
-from telnetlib import NOP
-from tkinter.messagebox import NO
-from typing import List, Union
+from typing import List, Sequence, Union
 from warnings import warn
 
 import napari
@@ -126,6 +124,14 @@ def surface_from_polys(polys):
         rays_faces += len(xs)
 
     return [np.array(vertices), np.array(faces), np.array(values)]
+
+
+def create_class_labels(labels: np.ndarray, class_ids: Sequence[int], n_classes: int):
+    labels_cls = np.zeros_like(labels)
+    for c in range(n_classes + 1):
+        idx = (1 + np.where(class_ids == c)[0]).tolist()
+        labels_cls[np.isin(labels, idx)] = c
+    return labels_cls
 
 
 # -------------------------------------------------------------------------
@@ -335,7 +341,7 @@ def plugin_wrapper():
         defaults_button,
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
-        print(output_type)
+
         model = get_model(
             model_type,
             {StarDist2D: model2d, StarDist3D: model3d, CUSTOM_MODEL: model_folder}[
@@ -468,20 +474,52 @@ def plugin_wrapper():
             )
 
             if cnn_output:
-                labels, polys = tuple(zip(*res[0]))
+                labels, t_polys = tuple(zip(*res[0]))
                 cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
             else:
-                labels, polys = res
+                labels, t_polys = res
 
             labels = np.asarray(labels)
 
-            if len(polys) > 1:
+            if isinstance(model, StarDist3D):
+                # TODO poly output support for 3D timelapse
+                polys = None
+            else:
+                polys = dict(
+                    coord=np.concatenate(
+                        tuple(
+                            np.insert(p["coord"], t, _t, axis=-2)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                    points=np.concatenate(
+                        tuple(
+                            np.insert(p["points"], t, _t, axis=-1)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                )
+
+            if model._is_multiclass():
+                labels_multiclass = np.stack(
+                    [
+                        create_class_labels(_y, _p["class_id"], model.config.n_classes)
+                        for _y, _p in zip(labels, t_polys)
+                    ],
+                    axis=0,
+                )
+            else:
+                labels_multiclass = None
+
+            if len(labels) > 1:
                 if timelapse_opts == TimelapseLabels.Match.value:
                     # match labels in consecutive frames (-> simple IoU tracking)
                     labels = group_matching_labels(labels)
                 elif timelapse_opts == TimelapseLabels.Unique.value:
                     # make label ids unique (shift by offset)
-                    offsets = np.cumsum([len(p["points"]) for p in polys])
+                    offsets = np.cumsum([len(p["points"]) for p in t_polys])
                     for y, off in zip(labels[1:], offsets):
                         y[y > 0] += off
                 elif timelapse_opts == TimelapseLabels.Separate.value:
@@ -493,27 +531,6 @@ def plugin_wrapper():
                     )
 
             labels = np.moveaxis(labels, 0, t)
-
-            if isinstance(model, StarDist3D):
-                # TODO poly output support for 3D timelapse
-                polys = None
-            else:
-                polys = dict(
-                    coord=np.concatenate(
-                        tuple(
-                            np.insert(p["coord"], t, _t, axis=-2)
-                            for _t, p in enumerate(polys)
-                        ),
-                        axis=0,
-                    ),
-                    points=np.concatenate(
-                        tuple(
-                            np.insert(p["points"], t, _t, axis=-1)
-                            for _t, p in enumerate(polys)
-                        ),
-                        axis=0,
-                    ),
-                )
 
             if cnn_output:
                 pred = (labels, polys), cnn_out
@@ -533,6 +550,16 @@ def plugin_wrapper():
                 sparse=(not cnn_output),
                 return_predict=cnn_output,
             )
+
+            if model._is_multiclass():
+                _labels = pred[0][0] if cnn_output else pred[0]
+                _polys = pred[0][1] if cnn_output else pred[1]
+                labels_multiclass = create_class_labels(
+                    _labels, _polys["class_id"], model.config.n_classes
+                )
+            else:
+                labels_multiclass = None
+
         progress_bar.hide()
 
         # determine scale for output axes
@@ -615,14 +642,9 @@ def plugin_wrapper():
                 #         mask = labels[r.slice]==r.label
                 #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
 
-                labels_cls = np.zeros_like(labels)
-                for c in range(model.config.n_classes + 1):
-                    idx = (1 + np.where(polys["class_id"] == c)[0]).tolist()
-                    labels_cls[np.isin(labels, idx)] = c
-
                 layers.append(
                     (
-                        labels_cls,
+                        labels_multiclass,
                         dict(
                             name="StarDist class labels",
                             visible=False,

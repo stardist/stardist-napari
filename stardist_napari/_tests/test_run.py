@@ -85,11 +85,19 @@ def test_custom_model_2d(plugin, nuclei_2d):
     return kwargs
 
 
-def test_multiclass_2d(plugin, he_2d):
+@pytest.mark.parametrize("timelapse", (False, True))
+def test_multiclass_2d(plugin, he_2d, timelapse):
+
+    if timelapse:
+        image = np.stack([he_2d.data] * 2, axis=0)
+        image = napari.layers.Image(image, name="timelapse")
+    else:
+        image = he_2d
+
     kwargs = dict(
         viewer=None,
-        image=he_2d,
-        axes="YXC",
+        image=image,
+        axes="TYXC" if timelapse else "YXC",
         model_type=StarDist2D,
         model2d="2D_conic_he",
     )
@@ -98,22 +106,22 @@ def test_multiclass_2d(plugin, he_2d):
     if StarDist2D.from_pretrained(kwargs["model2d"]) is None:
         return
 
-    for output_type, num_out in (
-        (Output.Labels.value, 2),
-        (Output.Polys.value, 1),
-        (Output.Both.value, 3),
-    ):
-        out = plugin(
-            **kwargs,
-            output_type=output_type,
-        )
-        assert len(out) == num_out
+    # for output_type, num_out in (
+    #     (Output.Labels.value, 2),
+    #     (Output.Polys.value, 1),
+    #     (Output.Both.value, 3),
+    # ):
+    #     out = plugin(
+    #         **kwargs,
+    #         output_type=output_type,
+    #     )
+    #     assert len(out) == num_out
 
     out = plugin(
         **kwargs,
         output_type=Output.Both.value,
         cnn_output=True,
-        n_tiles=(3, 2, 1),
+        n_tiles=(1, 3, 2, 1) if timelapse else (3, 2, 1),
     )
 
     assert len(out) == 6
@@ -200,9 +208,13 @@ if __name__ == "__main__":
 
     # plugin, nuclei_2d = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
     # out, kwargs = test_fluo_2d(plugin, nuclei_2d)
+    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_he_2d())
+    # out, kwargs = test_multiclass_2d(plugin, img)
 
-    plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_he_2d())
-    out, kwargs = test_multiclass_2d(plugin, img)
+    plugin, img = make_dock_widget(), napari.layers.Image(
+        data.test_image_he_2d()[:128, :128]
+    )
+    out, kwargs = test_multiclass_2d(plugin, img, True)
 
     # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
     # out, kwargs = test_timelapse_2d(plugin, img)
