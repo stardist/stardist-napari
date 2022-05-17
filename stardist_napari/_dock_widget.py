@@ -127,6 +127,17 @@ def surface_from_polys(polys):
     return [np.array(vertices), np.array(faces), np.array(values)]
 
 
+def corner_pixels_multiscale(layer):
+    # layer.corner_pixels are with respect to the currently used resolution level (layer.data_level)
+    # -> convert to reference highest resolution level (layer.data[0]), which is used by stardist
+    factor = layer.downsample_factors[layer.data_level]
+    scaled_corner = np.round(layer.corner_pixels * factor).astype(int)
+    shape_max = layer.data[0].shape
+    for i in range(len(shape_max)):
+        scaled_corner[:, i] = np.clip(scaled_corner[:, i], 0, shape_max[i])
+    return scaled_corner
+
+
 # -------------------------------------------------------------------------
 
 
@@ -369,16 +380,6 @@ def plugin_wrapper():
                 raise NotImplementedError(
                     "field of view prediction only supported in 2D display mode"
                 )
-
-            def corner_pixels_multiscale(layer):
-                # layer.corner_pixels are with respect to the currently used resolution level (layer.data_level)
-                # -> convert to reference highest resolution level (layer.data[0]), which is used by stardist
-                factor = layer.downsample_factors[layer.data_level]
-                scaled_corner = np.round(layer.corner_pixels * factor).astype(int)
-                shape_max = layer.data[0].shape
-                for i in range(len(shape_max)):
-                    scaled_corner[:, i] = np.clip(scaled_corner[:, i], 0, shape_max[i])
-                return scaled_corner
 
             def get_slice_not_displayed(i):
                 return (
