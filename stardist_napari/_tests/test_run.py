@@ -29,6 +29,8 @@ def test_fluo_2d(plugin, nuclei_2d):
     )
     assert len(out) == 4
 
+    return out, kwargs
+
 
 def test_fluo_3d(plugin, nuclei_3d):
     kwargs = dict(viewer=None, image=nuclei_3d, axes="ZYX", model_type=StarDist3D, model3d='3D_demo')
@@ -114,3 +116,17 @@ def test_he_2d(plugin, he_2d):
 
     out = plugin(**kwargs)
     assert len(out) == 2
+
+
+
+if __name__ == "__main__":
+    from stardist import data
+    from stardist_napari import make_dock_widget
+
+    plugin, img = make_dock_widget(), data.test_image_nuclei_2d() 
+
+    out, kwargs = test_fluo_2d(plugin, img)
+
+
+
+
