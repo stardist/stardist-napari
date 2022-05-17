@@ -369,6 +369,7 @@ def plugin_wrapper():
         # -> i.e. not affected by changing the viewer dimensions ordering, etc.
 
         if fov_image:
+            # it's all a big mess based on shaky assumptions...
             if viewer is None:
                 raise RuntimeError("viewer is None")
             if model.config.n_dim == 3:
@@ -381,39 +382,61 @@ def plugin_wrapper():
                     "field of view prediction only supported in 2D display mode"
                 )
 
-            def get_slice_not_displayed(i):
+            def get_slice_not_displayed(vdim, idim):
+                # vdim: dimension index wrt. to viewer
+                # idim: dimension index wrt. to image
                 # if timelapse, return visible/selected frame
-                if axes[i] == "T":
+                if axes[idim] == "T":
                     return slice(
-                        viewer.dims.current_step[i], 1 + viewer.dims.current_step[i]
+                        viewer.dims.current_step[vdim],
+                        1 + viewer.dims.current_step[vdim],
                     )
                 # otherwise (multi-channel image) return entire dimension
                 else:
-                    return slice(0, x.shape[i])
+                    return slice(0, x.shape[idim])
 
             corner_pixels = (
                 corner_pixels_multiscale(image)
                 if image.multiscale
                 else image.corner_pixels
             )
+            n_corners = corner_pixels.shape[1]
+            n_corners <= x.ndim or _raise(RuntimeError("assumption violated"))
 
-            sl = tuple(
-                slice(fr, to)
-                if i in viewer.dims.displayed
-                else get_slice_not_displayed(i)
-                for i, (fr, to) in enumerate(zip(corner_pixels[0], corner_pixels[1]))
+            # map viewer dimension index to image dimension index
+            viewer_dim_to_image_dim = dict(
+                zip(np.arange(viewer.dims.ndim)[-x.ndim :], range(x.ndim))
             )
+            # map viewer dimension index to corner pixel
+            viewer_dim_to_corner = dict(
+                zip(
+                    np.arange(viewer.dims.ndim)[-n_corners:],
+                    zip(corner_pixels[0], corner_pixels[1]),
+                )
+            )
+
+            sl = [None] * x.ndim
+            for vdim in range(viewer.dims.ndim):
+                idim = viewer_dim_to_image_dim.get(vdim)
+                c = viewer_dim_to_corner.get(vdim)
+                if c is not None:
+                    if vdim in viewer.dims.displayed:
+                        fr, to = c
+                        sl[idim] = slice(fr, to)
+                    else:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+                else:
+                    # not sure if this else branch is needed
+                    assert vdim in viewer.dims.not_displayed
+                    if idim is not None:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+            sl = tuple(sl)
             origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
 
             if DEBUG:
-                for sh, top_left, bottom_right, a in zip(
-                    x.shape,
-                    corner_pixels[0],
-                    corner_pixels[1],
-                    axes,
-                ):
-                    print(f"{a}({sh}): {top_left}-{bottom_right}")
-                print(sl)
+                for sh, s, a in zip(x.shape, sl, axes):
+                    print(f"{a}({sh}): {s.start}:{s.stop}")
+                # print(sl)
 
             x = x[sl]
         else:
