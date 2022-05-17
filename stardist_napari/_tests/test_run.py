@@ -30,9 +30,11 @@ def test_fluo_2d(plugin, nuclei_2d):
     out = plugin(
         **kwargs,
         input_scale=0.75,
+        output_type=Output.Both.value,
         cnn_output=True,
         n_tiles=(3, 2),
     )
+
     assert len(out) == 4
 
     return out, kwargs
@@ -58,6 +60,7 @@ def test_fluo_3d(plugin, nuclei_3d):
         **kwargs,
         input_scale=0.75,
         cnn_output=True,
+        output_type=Output.Both.value,
         n_tiles=(2, 1, 2),
     )
     assert len(out) == 4
@@ -102,10 +105,10 @@ def test_timelapse_2d(plugin, nuclei_2d):
     for t in TimelapseLabels:
         plugin(**kwargs, timelapse_opts=t.value)
 
-    out = plugin(**kwargs, cnn_output=True)
+    out = plugin(**kwargs, cnn_output=True, output_type=Output.Both.value)
     assert len(out) == 4
 
-    out = plugin(**kwargs, n_tiles=(1, 2, 3))
+    out = plugin(**kwargs, n_tiles=(1, 2, 3), output_type=Output.Both.value)
     assert len(out) == 2
 
     return out, kwargs
@@ -148,7 +151,7 @@ def test_he_2d(plugin, he_2d):
         model2d="2D_versatile_he",
     )
 
-    out = plugin(**kwargs)
+    out = plugin(**kwargs, output_type=Output.Both.value)
     assert len(out) == 2
 
     return out, kwargs
@@ -159,12 +162,27 @@ if __name__ == "__main__":
 
     from stardist_napari import make_dock_widget
 
-    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
-    # out, kwargs = test_fluo_2d(plugin, img)
+    # plugin, nuclei_2d = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
+    # out, kwargs = test_fluo_2d(plugin, nuclei_2d)
+
+    plugin, nuclei_2d = make_dock_widget(), napari.layers.Image(
+        data.test_image_nuclei_2d()
+    )
+
+    kwargs = dict(
+        viewer=None,
+        image=nuclei_2d,
+        axes="YX",
+        model_type=StarDist2D,
+        model2d="2D_versatile_fluo",
+    )
+
+    out = plugin(**kwargs)
+
     # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_2d())
     # out, kwargs = test_timelapse_2d(plugin, img)
     # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_3d())
     # out, kwargs = test_fluo_3d(plugin, img)
 
-    plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_3d())
-    out, kwargs = test_timelapse_3d(plugin, img)
+    # plugin, img = make_dock_widget(), napari.layers.Image(data.test_image_nuclei_3d())
+    # out, kwargs = test_timelapse_3d(plugin, img)

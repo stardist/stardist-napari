@@ -15,6 +15,8 @@ import os
 import time
 from enum import Enum
 from pathlib import Path
+from telnetlib import NOP
+from tkinter.messagebox import NO
 from typing import List, Union
 from warnings import warn
 
@@ -35,7 +37,7 @@ from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
-from . import DEBUG
+from . import DEBUG, NOPERSIST
 
 # -------------------------------------------------------------------------
 
@@ -302,7 +304,7 @@ def plugin_wrapper():
         defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
         progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
-        persist=True,
+        persist=not NOPERSIST,
         call_button=True,
     )
     def plugin(
@@ -333,7 +335,7 @@ def plugin_wrapper():
         defaults_button,
         progress_bar: mw.ProgressBar,
     ) -> List[napari.types.LayerDataTuple]:
-
+        print(output_type)
         model = get_model(
             model_type,
             {StarDist2D: model2d, StarDist3D: model3d, CUSTOM_MODEL: model_folder}[
@@ -602,16 +604,30 @@ def plugin_wrapper():
 
         if output_type in (Output.Labels.value, Output.Both.value):
 
-            # if model._is_multiclass():
-            #     from skimage.measure import regionprops
-            #     prob, dist, prob_class = cnn_out
-            #     prob_class = np.expand_dims(prob,-1)*prob_class
-            #     labels_cls = np.zeros_like(labels)
-            #     for r in regionprops(labels):
-            #         mask = labels[r.slice]==r.label
-            #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
+            if model._is_multiclass():
+                #     from skimage.measure import regionprops
+                #     prob, dist, prob_class = cnn_out
+                #     prob_class = np.expand_dims(prob,-1)*prob_class
+                #     labels_cls = np.zeros_like(labels)
+                #     for r in regionprops(labels):
+                #         mask = labels[r.slice]==r.label
+                #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
 
-            #     layers.append((labels_cls, dict(name='StarDist class labels', visible=False, scale=scale_out, opacity=.5, **lkwargs), 'labels'))
+                labels_cls = np.zeros_like(labels)
+
+                layers.append(
+                    (
+                        labels_cls,
+                        dict(
+                            name="StarDist class labels",
+                            visible=False,
+                            scale=scale_out,
+                            opacity=0.5,
+                            **lkwargs,
+                        ),
+                        "labels",
+                    )
+                )
 
             layers.append(
                 (
