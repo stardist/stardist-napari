@@ -1,9 +1,10 @@
 """
 TODO:
 - ability to cancel running stardist computation
-- run only on field of view
+- run only on field of view (needs testing)
   - https://forum.image.sc/t/how-could-i-get-the-viewed-coordinates/49709
   - https://napari.zulipchat.com/#narrow/stream/212875-general/topic/corner.20pixels.20and.20dims.20displayed
+  - https://github.com/napari/napari/issues/2487
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
 - try progress bar via @thread_workers
@@ -126,6 +127,17 @@ def surface_from_polys(polys):
     return [np.array(vertices), np.array(faces), np.array(values)]
 
 
+def corner_pixels_multiscale(layer):
+    # layer.corner_pixels are with respect to the currently used resolution level (layer.data_level)
+    # -> convert to reference highest resolution level (layer.data[0]), which is used by stardist
+    factor = layer.downsample_factors[layer.data_level]
+    scaled_corner = np.round(layer.corner_pixels * factor).astype(int)
+    shape_max = layer.data[0].shape
+    for i in range(len(shape_max)):
+        scaled_corner[:, i] = np.clip(scaled_corner[:, i], 0, shape_max[i])
+    return scaled_corner
+
+
 def create_class_labels(labels: np.ndarray, class_ids: Sequence[int], n_classes: int):
     labels_cls = np.zeros_like(labels)
     for c in range(n_classes + 1):
@@ -188,6 +200,7 @@ def plugin_wrapper():
         model2d=models_reg[StarDist2D][0][1],
         model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
+        fov_image=False,
         input_scale="None",
         perc_low=1.0,
         perc_high=99.8,
@@ -210,6 +223,11 @@ def plugin_wrapper():
         ),
         image=dict(label="Input Image"),
         axes=dict(widget_type="LineEdit", label="Image Axes"),
+        fov_image=dict(
+            widget_type="CheckBox",
+            text="Predict on field of view (only for 2D models in 2D view)",
+            value=DEFAULTS["fov_image"],
+        ),
         label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
         model_type=dict(
             widget_type="RadioButtons",
@@ -314,10 +332,11 @@ def plugin_wrapper():
         call_button=True,
     )
     def plugin(
-        viewer: napari.Viewer,
+        viewer: Union[napari.Viewer, None],
         label_head,
         image: napari.layers.Image,
         axes,
+        fov_image,
         label_nn,
         model_type,
         model2d,
@@ -349,9 +368,97 @@ def plugin_wrapper():
             ],
         )
 
-        lkwargs = {}
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        # axes and x correspond to the original (and immutable) order of image dimensions
+        # -> i.e. not affected by changing the viewer dimensions ordering, etc.
+
+        if fov_image and model.config.n_dim == 2 and viewer.dims.ndisplay == 2:
+            # it's all a big mess based on shaky assumptions...
+            if viewer is None:
+                raise RuntimeError("viewer is None")
+            # if model.config.n_dim == 3:
+            #     raise NotImplementedError(
+            #         "field of view prediction only supported for 2D models at the moment"
+            #     )
+            # if viewer.dims.ndisplay != 2:
+            #     raise NotImplementedError(
+            #         "field of view prediction only supported in 2D display mode"
+            #     )
+            if image.rgb and axes[-1] != "C":
+                raise RuntimeError("rgb image must have channels as last axis/dimension")
+
+            def get_slice_not_displayed(vdim, idim):
+                # vdim: dimension index wrt. viewer
+                # idim: dimension index wrt. image
+                # if timelapse, return visible/selected frame
+                if axes[idim] == "T":
+                    return slice(
+                        viewer.dims.current_step[vdim],
+                        1 + viewer.dims.current_step[vdim],
+                    )
+                # otherwise (multi-channel image) return entire dimension
+                else:
+                    return slice(0, x.shape[idim])
+
+            corner_pixels = (
+                corner_pixels_multiscale(image)
+                if image.multiscale
+                else image.corner_pixels
+            )
+            n_corners = corner_pixels.shape[1]
+            n_corners <= x.ndim or _raise(RuntimeError("assumption violated"))
+
+            # map viewer dimension index to image dimension index
+            n_dims = x.ndim - (1 if image.rgb else 0)
+            viewer_dim_to_image_dim = dict(
+                zip(np.arange(viewer.dims.ndim)[-n_dims:], range(n_dims))
+            )
+            # map viewer dimension index to corner pixel
+            viewer_dim_to_corner = dict(
+                zip(
+                    np.arange(viewer.dims.ndim)[-n_corners:],
+                    zip(corner_pixels[0], corner_pixels[1]),
+                )
+            )
+            # if DEBUG:
+            #     print(f"{viewer_dim_to_image_dim = }")
+            #     print(f"{viewer_dim_to_corner = }")
+
+            sl = [None] * x.ndim
+            for vdim in range(viewer.dims.ndim):
+                idim = viewer_dim_to_image_dim.get(vdim)
+                c = viewer_dim_to_corner.get(vdim)
+                # DEBUG and print(f"{vdim=}, {idim=}, {c=}")
+                if c is not None:
+                    if vdim in viewer.dims.displayed:
+                        fr, to = c
+                        sl[idim] = slice(fr, to)
+                    else:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+                else:
+                    # not sure if this else branch is needed
+                    assert vdim in viewer.dims.not_displayed
+                    if idim is not None:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+
+            if image.rgb:
+                idim = x.ndim - 1
+                # set channel slice here, since channel of rgb image not part of viewer dimensions
+                assert sl[idim] is None and axes[idim] == "C"
+                sl[idim] = get_slice_not_displayed(None, idim)
+
+            sl = tuple(sl)
+
+            if DEBUG:
+                for sh, s, a in zip(x.shape, sl, axes):
+                    print(f"{a}({sh}): {s}")
+
+            x = x[sl]
+            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
+        else:
+            origin_in_dict = {}
 
         if input_scale is not None:
             if isinstance(input_scale, numbers.Number):
@@ -369,6 +476,7 @@ def plugin_wrapper():
                 f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
             )
             # TODO: adjust image.scale according to shuffled axes
+            # TODO: undo output axes permutation, such that outputs can be overlayed with inputs in the viewer
 
         if norm_image:
             axes_norm = axes_check_and_normalize(norm_axes)
@@ -567,6 +675,7 @@ def plugin_wrapper():
         # determine scale for output axes
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
+        origin_out = [origin_in_dict.get(a, 0) for a in axes_out]
 
         # constructing the actual napari layers
         layers = []
@@ -585,8 +694,8 @@ def plugin_wrapper():
             # small translation correction if grid > 1 (since napari centers objects)
             # TODO: this doesn't look correct
             _translate = [
-                0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
-                for a, s in zip(axes_out, scale_out)
+                o + 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
+                for a, s, o in zip(axes_out, scale_out, origin_out)
             ]
 
             layers.append(
@@ -596,7 +705,6 @@ def plugin_wrapper():
                         name="StarDist distances",
                         scale=[1] + _scale,
                         translate=[0] + _translate,
-                        **lkwargs,
                     ),
                     "image",
                 )
@@ -608,7 +716,6 @@ def plugin_wrapper():
                         name="StarDist probability",
                         scale=_scale,
                         translate=_translate,
-                        **lkwargs,
                     ),
                     "image",
                 )
@@ -623,7 +730,6 @@ def plugin_wrapper():
                             name="StarDist class probabilities",
                             scale=[1] + _scale,
                             translate=[0] + _translate,
-                            **lkwargs,
                         ),
                         "image",
                     )
@@ -634,7 +740,6 @@ def plugin_wrapper():
         if output_type in (Output.Labels.value, Output.Both.value):
 
             if model._is_multiclass():
-
                 # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
                 #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
 
@@ -646,7 +751,7 @@ def plugin_wrapper():
                             visible=False,
                             scale=scale_out,
                             opacity=0.5,
-                            **lkwargs,
+                            translate=origin_out,
                         ),
                         "labels",
                     )
@@ -655,7 +760,12 @@ def plugin_wrapper():
             layers.append(
                 (
                     labels,
-                    dict(name="StarDist labels", scale=scale_out, opacity=0.5, **lkwargs),
+                    dict(
+                        name="StarDist labels",
+                        scale=scale_out,
+                        opacity=0.5,
+                        translate=origin_out,
+                    ),
                     "labels",
                 )
             )
@@ -676,7 +786,7 @@ def plugin_wrapper():
                             contrast_limits=(0, surface[-1].max()),
                             scale=scale_out,
                             colormap=label_colormap(n_objects),
-                            **lkwargs,
+                            translate=origin_out,
                         ),
                         "surface",
                     )
@@ -694,7 +804,7 @@ def plugin_wrapper():
                             edge_width=0.75,
                             edge_color="yellow",
                             face_color=[0, 0, 0, 0],
-                            **lkwargs,
+                            translate=origin_out,
                         ),
                         "shapes",
                     )
@@ -775,6 +885,16 @@ def plugin_wrapper():
                 print(f"HELP: {msg}")
 
         def _update(self):
+            def _fov():
+                nonlocal model_selected
+                config = model_configs.get(model_selected, {})
+                model_dim = config.get("n_dim")
+                active = (
+                    self.viewer is not None
+                    and self.viewer.dims.ndisplay == 2
+                    and model_dim == 2
+                )
+                widgets_inactive(plugin.fov_image, active=active)
 
             # try to get a hold of the viewer (can be None when plugin starts)
             if self.viewer is None:
@@ -785,6 +905,8 @@ def plugin_wrapper():
                     self.viewer = plugin.viewer.value
                     if DEBUG:
                         print("GOT viewer")
+
+                    self.viewer.dims.events.ndisplay.connect(_fov)
 
                     @self.viewer.layers.events.removed.connect
                     def _layer_removed(event):
@@ -802,6 +924,7 @@ def plugin_wrapper():
                     plugin.model_folder.line_edit,
                     valid=valid,
                 )
+                _fov()
                 if valid:
                     config = self.args.model
                     axes = config.get("axes", "ZYXC"[-len(config["net_input_shape"]) :])
