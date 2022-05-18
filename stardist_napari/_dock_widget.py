@@ -635,13 +635,8 @@ def plugin_wrapper():
 
             if model._is_multiclass():
 
-                #     from skimage.measure import regionprops
-                #     prob, dist, prob_class = cnn_out
-                #     prob_class = np.expand_dims(prob,-1)*prob_class
-                #     labels_cls = np.zeros_like(labels)
-                #     for r in regionprops(labels):
-                #         mask = labels[r.slice]==r.label
-                #         labels_cls[r.slice][mask] = 1+np.argmax(np.sum(prob_class[r.slice][mask], 0)[1:])
+                # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
+                #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
 
                 layers.append(
                     (

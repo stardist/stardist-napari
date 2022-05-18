@@ -6,14 +6,13 @@ from stardist import data
 
 from stardist_napari import make_dock_widget
 
+# # def pytest_sessionstart(*args, **kwargs):
+# def pytest_configure(*args, **kwargs):
+#     os.environ["STARDIST_NAPARI_NOPERSIST"] = "true"
 
-# def pytest_sessionstart(*args, **kwargs):
-def pytest_configure(*args, **kwargs):
-    os.environ["STARDIST_NAPARI_NOPERSIST"] = "true"
 
-
-def pytest_sessionfinish(*args, **kwargs):
-    del os.environ["STARDIST_NAPARI_NOPERSIST"]
+# def pytest_sessionfinish(*args, **kwargs):
+#     del os.environ["STARDIST_NAPARI_NOPERSIST"]
 
 
 @pytest.fixture(scope="function")
