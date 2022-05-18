@@ -217,7 +217,7 @@ def plugin_wrapper():
         axes=dict(widget_type="LineEdit", label="Image Axes"),
         fov_image=dict(
             widget_type="CheckBox",
-            text="Predict on field of view only",
+            text="Predict on field of view (only for 2D models in 2D view)",
             value=DEFAULTS["fov_image"],
         ),
         label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
@@ -368,19 +368,18 @@ def plugin_wrapper():
         # axes and x correspond to the original (and immutable) order of image dimensions
         # -> i.e. not affected by changing the viewer dimensions ordering, etc.
 
-        if fov_image:
+        if fov_image and model.config.n_dim == 2 and viewer.dims.ndisplay == 2:
             # it's all a big mess based on shaky assumptions...
             if viewer is None:
                 raise RuntimeError("viewer is None")
-            if model.config.n_dim == 3:
-                raise NotImplementedError(
-                    "field of view prediction only supported for 2D models at the moment"
-                )
-            if viewer.dims.ndisplay != 2:
-                # TODO: disable FOV checkbox when 3D viewer mode is enabled
-                raise NotImplementedError(
-                    "field of view prediction only supported in 2D display mode"
-                )
+            # if model.config.n_dim == 3:
+            #     raise NotImplementedError(
+            #         "field of view prediction only supported for 2D models at the moment"
+            #     )
+            # if viewer.dims.ndisplay != 2:
+            #     raise NotImplementedError(
+            #         "field of view prediction only supported in 2D display mode"
+            #     )
 
             def get_slice_not_displayed(vdim, idim):
                 # vdim: dimension index wrt. to viewer
@@ -458,7 +457,7 @@ def plugin_wrapper():
                 f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
             )
             # TODO: adjust image.scale according to shuffled axes
-            # TODO: undo output axes perumutation, such that outputs can be overlayed with inputs in the viewer
+            # TODO: undo output axes permutation, such that outputs can be overlayed with inputs in the viewer
 
         if norm_image:
             axes_norm = axes_check_and_normalize(norm_axes)
@@ -809,6 +808,16 @@ def plugin_wrapper():
                 print(f"HELP: {msg}")
 
         def _update(self):
+            def _fov():
+                nonlocal model_selected
+                config = model_configs.get(model_selected, {})
+                model_dim = config.get("n_dim")
+                active = (
+                    self.viewer is not None
+                    and self.viewer.dims.ndisplay == 2
+                    and model_dim == 2
+                )
+                widgets_inactive(plugin.fov_image, active=active)
 
             # try to get a hold of the viewer (can be None when plugin starts)
             if self.viewer is None:
@@ -819,6 +828,8 @@ def plugin_wrapper():
                     self.viewer = plugin.viewer.value
                     if DEBUG:
                         print("GOT viewer")
+
+                    self.viewer.dims.events.ndisplay.connect(_fov)
 
                     @self.viewer.layers.events.removed.connect
                     def _layer_removed(event):
@@ -836,6 +847,7 @@ def plugin_wrapper():
                     plugin.model_folder.line_edit,
                     valid=valid,
                 )
+                _fov()
                 if valid:
                     config = self.args.model
                     axes = config.get("axes", "ZYXC"[-len(config["net_input_shape"]) :])
