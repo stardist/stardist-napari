@@ -380,10 +380,12 @@ def plugin_wrapper():
             #     raise NotImplementedError(
             #         "field of view prediction only supported in 2D display mode"
             #     )
+            if image.rgb and axes[-1] != "C":
+                raise RuntimeError("rgb image must have channels as last axis/dimension")
 
             def get_slice_not_displayed(vdim, idim):
-                # vdim: dimension index wrt. to viewer
-                # idim: dimension index wrt. to image
+                # vdim: dimension index wrt. viewer
+                # idim: dimension index wrt. image
                 # if timelapse, return visible/selected frame
                 if axes[idim] == "T":
                     return slice(
@@ -403,8 +405,9 @@ def plugin_wrapper():
             n_corners <= x.ndim or _raise(RuntimeError("assumption violated"))
 
             # map viewer dimension index to image dimension index
+            n_dims = x.ndim - (1 if image.rgb else 0)
             viewer_dim_to_image_dim = dict(
-                zip(np.arange(viewer.dims.ndim)[-x.ndim :], range(x.ndim))
+                zip(np.arange(viewer.dims.ndim)[-n_dims:], range(n_dims))
             )
             # map viewer dimension index to corner pixel
             viewer_dim_to_corner = dict(
@@ -413,11 +416,15 @@ def plugin_wrapper():
                     zip(corner_pixels[0], corner_pixels[1]),
                 )
             )
+            # if DEBUG:
+            #     print(f"{viewer_dim_to_image_dim = }")
+            #     print(f"{viewer_dim_to_corner = }")
 
             sl = [None] * x.ndim
             for vdim in range(viewer.dims.ndim):
                 idim = viewer_dim_to_image_dim.get(vdim)
                 c = viewer_dim_to_corner.get(vdim)
+                # DEBUG and print(f"{vdim=}, {idim=}, {c=}")
                 if c is not None:
                     if vdim in viewer.dims.displayed:
                         fr, to = c
@@ -429,15 +436,21 @@ def plugin_wrapper():
                     assert vdim in viewer.dims.not_displayed
                     if idim is not None:
                         sl[idim] = get_slice_not_displayed(vdim, idim)
+
+            if image.rgb:
+                idim = x.ndim - 1
+                # set channel slice here, since channel of rgb image not part of viewer dimensions
+                assert sl[idim] is None and axes[idim] == "C"
+                sl[idim] = get_slice_not_displayed(None, idim)
+
             sl = tuple(sl)
-            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
 
             if DEBUG:
                 for sh, s, a in zip(x.shape, sl, axes):
-                    print(f"{a}({sh}): {s.start}:{s.stop}")
-                # print(sl)
+                    print(f"{a}({sh}): {s}")
 
             x = x[sl]
+            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
         else:
             origin_in_dict = {}
 
