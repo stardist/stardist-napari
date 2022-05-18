@@ -510,9 +510,11 @@ def plugin_wrapper():
                     ],
                     axis=0,
                 )
+                labels_multiclass = np.moveaxis(labels_multiclass, 0, t)
             else:
                 labels_multiclass = None
 
+            # optionally match labels if we have more than one timepoint
             if len(labels) > 1:
                 if timelapse_opts == TimelapseLabels.Match.value:
                     # match labels in consecutive frames (-> simple IoU tracking)
@@ -631,9 +633,8 @@ def plugin_wrapper():
 
         if output_type in (Output.Labels.value, Output.Both.value):
 
-            if model._is_multiclass() and not (
-                isinstance(model, StarDist3D) and "T" in axes
-            ):
+            if model._is_multiclass():
+
                 #     from skimage.measure import regionprops
                 #     prob, dist, prob_class = cnn_out
                 #     prob_class = np.expand_dims(prob,-1)*prob_class
