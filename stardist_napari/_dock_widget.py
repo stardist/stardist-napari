@@ -15,7 +15,7 @@ import os
 import time
 from enum import Enum
 from pathlib import Path
-from typing import List, Union
+from typing import List, Sequence, Union
 from warnings import warn
 
 import napari
@@ -35,7 +35,7 @@ from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
-from . import DEBUG
+from . import DEBUG, NOPERSIST
 
 # -------------------------------------------------------------------------
 
@@ -124,6 +124,14 @@ def surface_from_polys(polys):
         rays_faces += len(xs)
 
     return [np.array(vertices), np.array(faces), np.array(values)]
+
+
+def create_class_labels(labels: np.ndarray, class_ids: Sequence[int], n_classes: int):
+    labels_cls = np.zeros_like(labels)
+    for c in range(n_classes + 1):
+        idx = (1 + np.where(class_ids == c)[0]).tolist()
+        labels_cls[np.isin(labels, idx)] = c
+    return labels_cls
 
 
 # -------------------------------------------------------------------------
@@ -302,7 +310,7 @@ def plugin_wrapper():
         defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
         progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
-        persist=True,
+        persist=not NOPERSIST,
         call_button=True,
     )
     def plugin(
@@ -340,8 +348,6 @@ def plugin_wrapper():
                 model_type
             ],
         )
-        if model._is_multiclass():
-            warn("multi-class mode not supported yet, ignoring classification output")
 
         lkwargs = {}
         x = get_data(image)
@@ -468,20 +474,54 @@ def plugin_wrapper():
             )
 
             if cnn_output:
-                labels, polys = tuple(zip(*res[0]))
-                cnn_output = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
+                labels, t_polys = tuple(zip(*res[0]))
+                cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
             else:
-                labels, polys = res
+                labels, t_polys = res
 
             labels = np.asarray(labels)
 
-            if len(polys) > 1:
+            if isinstance(model, StarDist3D):
+                # TODO poly output support for 3D timelapse
+                polys = None
+            else:
+                polys = dict(
+                    coord=np.concatenate(
+                        tuple(
+                            np.insert(p["coord"], t, _t, axis=-2)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                    points=np.concatenate(
+                        tuple(
+                            np.insert(p["points"], t, _t, axis=-1)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                )
+
+            if model._is_multiclass():
+                labels_multiclass = np.stack(
+                    [
+                        create_class_labels(_y, _p["class_id"], model.config.n_classes)
+                        for _y, _p in zip(labels, t_polys)
+                    ],
+                    axis=0,
+                )
+                labels_multiclass = np.moveaxis(labels_multiclass, 0, t)
+            else:
+                labels_multiclass = None
+
+            # optionally match labels if we have more than one timepoint
+            if len(labels) > 1:
                 if timelapse_opts == TimelapseLabels.Match.value:
                     # match labels in consecutive frames (-> simple IoU tracking)
                     labels = group_matching_labels(labels)
                 elif timelapse_opts == TimelapseLabels.Unique.value:
                     # make label ids unique (shift by offset)
-                    offsets = np.cumsum([len(p["points"]) for p in polys])
+                    offsets = np.cumsum([len(p["points"]) for p in t_polys])
                     for y, off in zip(labels[1:], offsets):
                         y[y > 0] += off
                 elif timelapse_opts == TimelapseLabels.Separate.value:
@@ -494,29 +534,8 @@ def plugin_wrapper():
 
             labels = np.moveaxis(labels, 0, t)
 
-            if isinstance(model, StarDist3D):
-                # TODO poly output support for 3D timelapse
-                polys = None
-            else:
-                polys = dict(
-                    coord=np.concatenate(
-                        tuple(
-                            np.insert(p["coord"], t, _t, axis=-2)
-                            for _t, p in enumerate(polys)
-                        ),
-                        axis=0,
-                    ),
-                    points=np.concatenate(
-                        tuple(
-                            np.insert(p["points"], t, _t, axis=-1)
-                            for _t, p in enumerate(polys)
-                        ),
-                        axis=0,
-                    ),
-                )
-
             if cnn_output:
-                pred = (labels, polys), cnn_output
+                pred = (labels, polys), cnn_out
             else:
                 pred = labels, polys
 
@@ -533,12 +552,23 @@ def plugin_wrapper():
                 sparse=(not cnn_output),
                 return_predict=cnn_output,
             )
+
+            if model._is_multiclass():
+                _labels = pred[0][0] if cnn_output else pred[0]
+                _polys = pred[0][1] if cnn_output else pred[1]
+                labels_multiclass = create_class_labels(
+                    _labels, _polys["class_id"], model.config.n_classes
+                )
+            else:
+                labels_multiclass = None
+
         progress_bar.hide()
 
         # determine scale for output axes
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
 
+        # constructing the actual napari layers
         layers = []
         if cnn_output:
             (labels, polys), cnn_out = pred
@@ -583,10 +613,45 @@ def plugin_wrapper():
                     "image",
                 )
             )
+
+            if model._is_multiclass():
+                prob_class = np.moveaxis(cnn_out[2], -1, 0)
+                layers.append(
+                    (
+                        prob_class,
+                        dict(
+                            name="StarDist class probabilities",
+                            scale=[1] + _scale,
+                            translate=[0] + _translate,
+                            **lkwargs,
+                        ),
+                        "image",
+                    )
+                )
         else:
             labels, polys = pred
 
         if output_type in (Output.Labels.value, Output.Both.value):
+
+            if model._is_multiclass():
+
+                # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
+                #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
+
+                layers.append(
+                    (
+                        labels_multiclass,
+                        dict(
+                            name="StarDist class labels",
+                            visible=False,
+                            scale=scale_out,
+                            opacity=0.5,
+                            **lkwargs,
+                        ),
+                        "labels",
+                    )
+                )
+
             layers.append(
                 (
                     labels,
@@ -594,10 +659,13 @@ def plugin_wrapper():
                     "labels",
                 )
             )
+
         if output_type in (Output.Polys.value, Output.Both.value):
+
             if isinstance(model, StarDist3D):
                 if "T" in axes:
                     raise NotImplementedError("Polyhedra output for 3D timelapse")
+
                 n_objects = len(polys["points"])
                 surface = surface_from_polys(polys)
                 layers.append(
@@ -614,8 +682,6 @@ def plugin_wrapper():
                     )
                 )
             else:
-                # TODO: sometimes hangs for long time (indefinitely?) when returning many polygons (?)
-                #       seems to be a known issue: https://github.com/napari/napari/issues/2015
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys["coord"], -1, -2)
                 layers.append(
