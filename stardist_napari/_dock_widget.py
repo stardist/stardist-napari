@@ -580,7 +580,7 @@ def plugin_wrapper():
                 s * grid_dict.get(a, 1) / input_scale_dict.get(a, 1)
                 for a, s in zip(axes_out, scale_out)
             ]
-
+            # small translation correction if grid > 1 (since napari centers objects)
             # TODO: this doesn't look correct
             _translate = [
                 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
@@ -613,14 +613,14 @@ def plugin_wrapper():
             )
 
             if model._is_multiclass():
-                prob_class = np.moveaxis(cnn_out[-1], -1, 0)
+                prob_class = np.moveaxis(cnn_out[2], -1, 0)
                 layers.append(
                     (
                         prob_class,
                         dict(
                             name="StarDist class probabilities",
-                            scale=_scale,
-                            translate=_translate,
+                            scale=[1] + _scale,
+                            translate=[0] + _translate,
                             **lkwargs,
                         ),
                         "image",
@@ -665,10 +665,11 @@ def plugin_wrapper():
             )
 
         if output_type in (Output.Polys.value, Output.Both.value):
-            if isinstance(model, StarDist3D) and "T" in axes:
-                raise NotImplementedError("Polyhedra output for 3D timelapse")
 
             if isinstance(model, StarDist3D):
+                if "T" in axes:
+                    raise NotImplementedError("Polyhedra output for 3D timelapse")
+
                 n_objects = len(polys["points"])
                 surface = surface_from_polys(polys)
                 layers.append(
