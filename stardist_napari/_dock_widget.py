@@ -148,7 +148,7 @@ def create_class_labels(labels: np.ndarray, class_ids: Sequence[int], n_classes:
     return labels_cls
 
 
-def axes_permutation(axes_from: str, axes_to: str, x: Union[list[any], None] = None):
+def axes_permutation(axes_from: str, axes_to: str, x: Union[list, None] = None):
     """
     assumption: strings axes_from and axes_to are permutations of each other
     returns the index permutation to convert axes_from to axes_to
@@ -1386,8 +1386,9 @@ def plugin_wrapper():
     # -> triggered by napari (if there are any open images on plugin launch)
     @change_handler(plugin.image, init=False)
     def _image_change(image: napari.layers.Image):
-        ndim = get_data(image).ndim
-        plugin.image.tooltip = f"Shape: {get_data(image).shape}"
+        shape = get_data(image).shape
+        ndim = len(shape)
+        plugin.image.tooltip = f"Shape: {shape}"
 
         # dimensionality of selected model: 2, 3, or None (unknown)
         ndim_model = None
