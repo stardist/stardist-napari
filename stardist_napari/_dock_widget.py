@@ -26,6 +26,7 @@ from csbdeep.utils import (
     axes_check_and_normalize,
     axes_dict,
     load_json,
+    move_image_axes,
     normalize,
 )
 from magicgui import magicgui
@@ -81,8 +82,9 @@ def get_model_config_and_thresholds(path):
 
 def get_data(image):
     image = image.data[0] if image.multiscale else image.data
-    # enforce dense numpy array in case we are given a dask array etc
-    return np.asarray(image)
+    if not (hasattr(image, "shape") and hasattr(image, "__getitem__")):
+        image = np.asanyarray(image)
+    return image
 
 
 def change_handler(*widgets, init=True, debug=DEBUG):
@@ -144,6 +146,77 @@ def create_class_labels(labels: np.ndarray, class_ids: Sequence[int], n_classes:
         idx = (1 + np.where(class_ids == c)[0]).tolist()
         labels_cls[np.isin(labels, idx)] = c
     return labels_cls
+
+
+def axes_permutation(axes_from: str, axes_to: str, x: Union[list[any], None] = None):
+    """
+    assumption: strings axes_from and axes_to are permutations of each other
+    returns the index permutation to convert axes_from to axes_to
+    if list x is given, applies the index permutation to x instead of returning it
+    """
+    axes_from = axes_check_and_normalize(axes_from)
+    axes_to = axes_check_and_normalize(axes_to)
+    assert len(set(axes_from).symmetric_difference(set(axes_to))) == 0
+    assert x is None or (isinstance(x, list) and len(x) == len(axes_from))
+    ind = [axes_from.index(a) for a in axes_to]
+    return ind if x is None else [x[i] for i in ind]
+
+
+def move_layer_axes(layer: napari.types.FullLayerData, axes_from: str, axes_to: str):
+    """
+    layer:
+        napari full layer data tuple (data, options, type)
+    axes_from:
+        axes of output, that corresponds to layer data
+    axes_to:
+        axes of input image, to which the axes of the layer data should be changed
+
+    returns modified layer data tuple, with adapted data and options (scale, translate)
+    """
+    axes_from = axes_check_and_normalize(axes_from)
+    axes_to = axes_check_and_normalize(axes_to)
+    if axes_from == axes_to:
+        return layer
+
+    data, options, ltype = layer
+    # print(ltype, options)
+    expand_axes = lambda x, *args: x  # do nothing
+    c_axes_from = axes_from  # channel-adjusted axes_from
+
+    # input (axes_to) has channels, but output (axes_from) doesn't
+    if "C" in axes_to and "C" not in axes_from:
+        if axes_to[0] == "C":
+            # input starts with channel dimension -> ignore for outputs
+            axes_to = axes_to.replace("C", "")
+        else:
+            # input doesn't start with channels -> add dummy channel dimension to output
+            ch = axes_to.index("C")
+            expand_axes = lambda x, v=0: np.insert(x, ch, v, axis=-1)
+
+            c_axes_from = list(axes_from)
+            c_axes_from.insert(ch, "C")
+            c_axes_from = "".join(c_axes_from)
+
+    if ltype.lower() in ("image", "labels"):
+        data = move_image_axes(data, axes_from, axes_to, adjust_singletons=True)
+    elif ltype.lower() in ("shapes",):
+        data = expand_axes(data)[..., axes_permutation(c_axes_from, axes_to)]
+    elif ltype.lower() in ("surface",):
+        vertices, faces, values = data
+        vertices = expand_axes(vertices)[..., axes_permutation(c_axes_from, axes_to)]
+        faces = expand_axes(faces)[..., axes_permutation(c_axes_from, axes_to)]
+        data = [vertices, faces, values]
+    else:
+        raise NotImplementedError(f"layer type '{ltype}' not supported")
+
+    # update scale and translate
+    for k, e in (("scale", 1), ("translate", 0)):
+        v = options.get(k)
+        if v is not None:
+            options[k] = axes_permutation(c_axes_from, axes_to, list(expand_axes(v, e)))
+
+    # print(ltype, options)
+    return data, options, ltype
 
 
 # -------------------------------------------------------------------------
@@ -392,15 +465,17 @@ def plugin_wrapper():
             def get_slice_not_displayed(vdim, idim):
                 # vdim: dimension index wrt. viewer
                 # idim: dimension index wrt. image
-                # if timelapse, return visible/selected frame
                 if axes[idim] == "T":
+                    # if timelapse, return visible/selected frame
                     return slice(
                         viewer.dims.current_step[vdim],
                         1 + viewer.dims.current_step[vdim],
                     )
-                # otherwise (multi-channel image) return entire dimension
-                else:
+                elif axes[idim] == "C":
+                    # if channel, return entire dimension
                     return slice(0, x.shape[idim])
+                else:
+                    return None
 
             corner_pixels = (
                 corner_pixels_multiscale(image)
@@ -423,23 +498,26 @@ def plugin_wrapper():
                 )
             )
             # if DEBUG:
+            #     print(f"{corner_pixels = }")
             #     print(f"{viewer_dim_to_image_dim = }")
             #     print(f"{viewer_dim_to_corner = }")
+            #     print(f"{viewer.dims.displayed = }")
 
             sl = [None] * x.ndim
             for vdim in range(viewer.dims.ndim):
                 idim = viewer_dim_to_image_dim.get(vdim)
                 c = viewer_dim_to_corner.get(vdim)
-                # DEBUG and print(f"{vdim=}, {idim=}, {c=}")
+                # DEBUG and print(
+                #     f"{vdim=}, {idim=}{f'/{axes[idim]}' if idim is not None else ''}, {c=}"
+                # )
                 if c is not None:
                     if vdim in viewer.dims.displayed:
                         fr, to = c
-                        sl[idim] = slice(fr, to)
+                        sl[idim] = None if fr == to else slice(fr, to)
                     else:
                         sl[idim] = get_slice_not_displayed(vdim, idim)
                 else:
-                    # not sure if this else branch is needed
-                    assert vdim in viewer.dims.not_displayed
+                    # assert vdim in viewer.dims.not_displayed
                     if idim is not None:
                         sl[idim] = get_slice_not_displayed(vdim, idim)
 
@@ -450,6 +528,10 @@ def plugin_wrapper():
                 sl[idim] = get_slice_not_displayed(None, idim)
 
             sl = tuple(sl)
+
+            invalid_axes = "".join(a for s, a in zip(sl, axes) if s is None)
+            if len(invalid_axes) > 0:
+                raise ValueError(f"Invalid field of view range for axes {invalid_axes}")
 
             if DEBUG:
                 for sh, s, a in zip(x.shape, sl, axes):
@@ -471,12 +553,16 @@ def plugin_wrapper():
         else:
             input_scale_dict = {}
 
-        if not axes.replace("T", "").startswith(model._axes_out.replace("C", "")):
-            warn(
-                f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
-            )
-            # TODO: adjust image.scale according to shuffled axes
-            # TODO: undo output axes permutation, such that outputs can be overlayed with inputs in the viewer
+        # if not axes.replace("T", "").startswith(model._axes_out.replace("C", "")):
+        #     warn(
+        #         f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
+        #     )
+
+        # TODO: adjust image.scale according to shuffled axes
+
+        # enforce dense numpy array in case we are given a dask array etc
+        # -> only after (potential) field of view cropping
+        x = np.asanyarray(x)
 
         if norm_image:
             axes_norm = axes_check_and_normalize(norm_axes)
@@ -672,6 +758,9 @@ def plugin_wrapper():
 
         progress_bar.hide()
 
+        layer_axes_from = "".join(axes_out)
+        layer_axes_to = axes.replace("C", "") if image.rgb else axes
+
         # determine scale for output axes
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
@@ -699,39 +788,51 @@ def plugin_wrapper():
             ]
 
             layers.append(
-                (
-                    dist,
-                    dict(
-                        name="StarDist distances",
-                        scale=[1] + _scale,
-                        translate=[0] + _translate,
+                move_layer_axes(
+                    (
+                        dist,
+                        dict(
+                            name="StarDist distances",
+                            scale=[1] + _scale,
+                            translate=[0] + _translate,
+                        ),
+                        "image",
                     ),
-                    "image",
+                    "C" + layer_axes_from,
+                    layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
                 )
             )
             layers.append(
-                (
-                    prob,
-                    dict(
-                        name="StarDist probability",
-                        scale=_scale,
-                        translate=_translate,
+                move_layer_axes(
+                    (
+                        prob,
+                        dict(
+                            name="StarDist probability",
+                            scale=_scale,
+                            translate=_translate,
+                        ),
+                        "image",
                     ),
-                    "image",
+                    layer_axes_from,
+                    layer_axes_to,
                 )
             )
 
             if model._is_multiclass():
                 prob_class = np.moveaxis(cnn_out[2], -1, 0)
                 layers.append(
-                    (
-                        prob_class,
-                        dict(
-                            name="StarDist class probabilities",
-                            scale=[1] + _scale,
-                            translate=[0] + _translate,
+                    move_layer_axes(
+                        (
+                            prob_class,
+                            dict(
+                                name="StarDist class probabilities",
+                                scale=[1] + _scale,
+                                translate=[0] + _translate,
+                            ),
+                            "image",
                         ),
-                        "image",
+                        "C" + layer_axes_from,
+                        layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
                     )
                 )
         else:
@@ -744,29 +845,37 @@ def plugin_wrapper():
                 #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
 
                 layers.append(
+                    move_layer_axes(
+                        (
+                            labels_multiclass,
+                            dict(
+                                name="StarDist class labels",
+                                visible=False,
+                                scale=scale_out,
+                                opacity=0.5,
+                                translate=origin_out,
+                            ),
+                            "labels",
+                        ),
+                        layer_axes_from,
+                        layer_axes_to,
+                    )
+                )
+
+            layers.append(
+                move_layer_axes(
                     (
-                        labels_multiclass,
+                        labels,
                         dict(
-                            name="StarDist class labels",
-                            visible=False,
+                            name="StarDist labels",
                             scale=scale_out,
                             opacity=0.5,
                             translate=origin_out,
                         ),
                         "labels",
-                    )
-                )
-
-            layers.append(
-                (
-                    labels,
-                    dict(
-                        name="StarDist labels",
-                        scale=scale_out,
-                        opacity=0.5,
-                        translate=origin_out,
                     ),
-                    "labels",
+                    layer_axes_from,
+                    layer_axes_to,
                 )
             )
 
@@ -779,39 +888,49 @@ def plugin_wrapper():
                 n_objects = len(polys["points"])
                 surface = surface_from_polys(polys)
                 layers.append(
-                    (
-                        surface,
-                        dict(
-                            name="StarDist polyhedra",
-                            contrast_limits=(0, surface[-1].max()),
-                            scale=scale_out,
-                            colormap=label_colormap(n_objects),
-                            translate=origin_out,
+                    move_layer_axes(
+                        (
+                            surface,
+                            dict(
+                                name="StarDist polyhedra",
+                                contrast_limits=(0, surface[-1].max()),
+                                scale=scale_out,
+                                colormap=label_colormap(n_objects),
+                                translate=origin_out,
+                            ),
+                            "surface",
                         ),
-                        "surface",
+                        layer_axes_from,
+                        layer_axes_to,
                     )
                 )
             else:
                 # TODO: coordinates correct or need offset (0.5 or so)?
                 shapes = np.moveaxis(polys["coord"], -1, -2)
                 layers.append(
-                    (
-                        shapes,
-                        dict(
-                            name="StarDist polygons",
-                            shape_type="polygon",
-                            scale=scale_out,
-                            edge_width=0.75,
-                            edge_color="yellow",
-                            face_color=[0, 0, 0, 0],
-                            translate=origin_out,
+                    move_layer_axes(
+                        (
+                            shapes,
+                            dict(
+                                name="StarDist polygons",
+                                shape_type="polygon",
+                                scale=scale_out,
+                                edge_width=0.75,
+                                edge_color="yellow",
+                                face_color=[0, 0, 0, 0],
+                                translate=origin_out,
+                            ),
+                            "shapes",
                         ),
-                        "shapes",
+                        layer_axes_from,
+                        layer_axes_to,
                     )
                 )
         return layers
 
     # -------------------------------------------------------------------------
+
+    # region UI interaction
 
     # don't want to load persisted values for these widgets
     plugin.axes.value = ""
@@ -1421,3 +1540,5 @@ def plugin_wrapper():
     #     print(i, layout.itemAt(i).widget())
 
     return plugin
+
+    # endregion
