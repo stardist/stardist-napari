@@ -39,6 +39,7 @@ from qtpy.QtWidgets import QSizePolicy
 
 from . import DEBUG, NOPERSIST
 
+# region utils
 # -------------------------------------------------------------------------
 
 CUSTOM_MODEL = "CUSTOM_MODEL"
@@ -50,23 +51,10 @@ class Output(Enum):
     Both = "Both"
 
 
-output_choices = [Output.Labels.value, Output.Polys.value, Output.Both.value]
-
-
 class TimelapseLabels(Enum):
     Match = "Match to previous frame (via overlap)"
     Unique = "Unique through time"
     Separate = "Separate per frame (no processing)"
-
-
-timelapse_opts = [
-    TimelapseLabels.Match.value,
-    TimelapseLabels.Unique.value,
-    TimelapseLabels.Separate.value,
-]
-
-
-# -------------------------------------------------------------------------
 
 
 def get_model_config_and_thresholds(path):
@@ -82,7 +70,7 @@ def get_model_config_and_thresholds(path):
 
 def get_data(image):
     image = image.data[0] if image.multiscale else image.data
-    if not (hasattr(image, "shape") and hasattr(image, "__getitem__")):
+    if not all(hasattr(image, attr) for attr in ("shape", "ndim", "__getitem__")):
         image = np.asanyarray(image)
     return image
 
@@ -219,6 +207,8 @@ def move_layer_axes(layer: napari.types.FullLayerData, axes_from: str, axes_to: 
     return data, options, ltype
 
 
+# endregion
+# region plugin
 # -------------------------------------------------------------------------
 
 
@@ -324,11 +314,16 @@ def plugin_wrapper():
             value=DEFAULTS["model3d"],
         ),
         model_folder=dict(
-            widget_type="FileEdit", visible=False, label="Custom Model", mode="d"
+            widget_type="FileEdit",
+            visible=False,
+            label="Custom Model",
+            mode="d",
         ),
         model_axes=dict(widget_type="LineEdit", label="Model Axes", value=""),
         norm_image=dict(
-            widget_type="CheckBox", text="Normalize Image", value=DEFAULTS["norm_image"]
+            widget_type="CheckBox",
+            text="Normalize Image",
+            value=DEFAULTS["norm_image"],
         ),
         label_nms=dict(widget_type="Label", label="<br><b>NMS Postprocessing:</b>"),
         perc_low=dict(
@@ -376,7 +371,7 @@ def plugin_wrapper():
         output_type=dict(
             widget_type="ComboBox",
             label="Output Type",
-            choices=output_choices,
+            choices=[e.value for e in Output],
             value=DEFAULTS["output_type"],
         ),
         label_adv=dict(widget_type="Label", label="<br><b>Advanced Options:</b>"),
@@ -388,11 +383,13 @@ def plugin_wrapper():
         timelapse_opts=dict(
             widget_type="ComboBox",
             label="Time-lapse Labels ",
-            choices=timelapse_opts,
+            choices=[e.value for e in TimelapseLabels],
             value=DEFAULTS["timelapse_opts"],
         ),
         cnn_output=dict(
-            widget_type="CheckBox", text="Show CNN Output", value=DEFAULTS["cnn_output"]
+            widget_type="CheckBox",
+            text="Show CNN Output",
+            value=DEFAULTS["cnn_output"],
         ),
         set_thresholds=dict(
             widget_type="PushButton",
@@ -436,13 +433,19 @@ def plugin_wrapper():
 
         model = get_model(
             model_type,
-            {StarDist2D: model2d, StarDist3D: model3d, CUSTOM_MODEL: model_folder}[
-                model_type
-            ],
+            {
+                StarDist2D: model2d,
+                StarDist3D: model3d,
+                CUSTOM_MODEL: model_folder,
+            }[model_type],
         )
 
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        # semantic output axes of predictions
+        assert model._axes_out[-1] == "C"
+        axes_out = list(model._axes_out[:-1])
 
         # axes and x correspond to the original (and immutable) order of image dimensions
         # -> i.e. not affected by changing the viewer dimensions ordering, etc.
@@ -451,14 +454,6 @@ def plugin_wrapper():
             # it's all a big mess based on shaky assumptions...
             if viewer is None:
                 raise RuntimeError("viewer is None")
-            # if model.config.n_dim == 3:
-            #     raise NotImplementedError(
-            #         "field of view prediction only supported for 2D models at the moment"
-            #     )
-            # if viewer.dims.ndisplay != 2:
-            #     raise NotImplementedError(
-            #         "field of view prediction only supported in 2D display mode"
-            #     )
             if image.rgb and axes[-1] != "C":
                 raise RuntimeError("rgb image must have channels as last axis/dimension")
 
@@ -553,11 +548,6 @@ def plugin_wrapper():
         else:
             input_scale_dict = {}
 
-        # if not axes.replace("T", "").startswith(model._axes_out.replace("C", "")):
-        #     warn(
-        #         f"output images have different axes ({model._axes_out.replace('C','')}) than input image ({axes})"
-        #     )
-
         # TODO: adjust image.scale according to shuffled axes
 
         # enforce dense numpy array in case we are given a dask array etc
@@ -571,29 +561,14 @@ def plugin_wrapper():
             )  # relevant axes present in input image
             assert len(axes_norm) > 0
             # always jointly normalize channels for RGB images
-            if ("C" in axes and image.rgb == True) and ("C" not in axes_norm):
+            if ("C" in axes and image.rgb) and ("C" not in axes_norm):
                 axes_norm = axes_norm + "C"
                 warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
             _axis = tuple(sorted(ax[a] for a in axes_norm))
-            # # TODO: address joint vs. channel/time-separate normalization properly (let user choose)
-            # #       also needs to be documented somewhere
-            # if 'T' in axes:
-            #     if 'C' not in axes or image.rgb == True:
-            #          # normalize channels jointly, frames independently
-            #          _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],))
-            #     else:
-            #         # normalize channels independently, frames independently
-            #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['T'],ax['C']))
-            # else:
-            #     if 'C' not in axes or image.rgb == True:
-            #          # normalize channels jointly
-            #         _axis = None
-            #     else:
-            #         # normalize channels independently
-            #         _axis = tuple(i for i in range(x.ndim) if i not in (ax['C'],))
             x = normalize(x, perc_low, perc_high, axis=_axis)
 
+        # region: progress-bar
         # TODO: progress bar (labels) often don't show up. events not processed?
         if "T" in axes:
             app = use_app()
@@ -640,11 +615,9 @@ def plugin_wrapper():
             progress_bar.range = (0, 0)
             progress_bar.show()
             use_app().process_events()
+        # endregion
 
-        # semantic output axes of predictions
-        assert model._axes_out[-1] == "C"
-        axes_out = list(model._axes_out[:-1])
-
+        # region: prediction
         if "T" in axes:
             x_reorder = np.moveaxis(x, t, 0)
             axes_reorder = axes.replace("T", "")
@@ -757,7 +730,9 @@ def plugin_wrapper():
                 labels_multiclass = None
 
         progress_bar.hide()
+        # endregion
 
+        # region: create output layer
         layer_axes_from = "".join(axes_out)
         layer_axes_to = axes.replace("C", "") if image.rgb else axes
 
@@ -926,7 +901,10 @@ def plugin_wrapper():
                         layer_axes_to,
                     )
                 )
+
         return layers
+
+    # endregion
 
     # -------------------------------------------------------------------------
 
