@@ -289,6 +289,12 @@ def _plugin_wrapper():
         cnn_output=False,
     )
 
+    DEFAULTS_WIDGET = DEFAULTS.copy()
+    DEFAULTS_WIDGET["output_type"] = DEFAULTS_WIDGET["output_type"].value
+    DEFAULTS_WIDGET["timelapse_opts"] = DEFAULTS_WIDGET["timelapse_opts"].value
+    DEFAULTS_WIDGET["input_scale"] = str(DEFAULTS_WIDGET["input_scale"])
+    DEFAULTS_WIDGET["n_tiles"] = str(DEFAULTS_WIDGET["n_tiles"])
+
     # -------------------------------------------------------------------------
 
     def plugin_function(
@@ -726,7 +732,7 @@ def _plugin_wrapper():
         fov_image=dict(
             widget_type="CheckBox",
             text="Predict on field of view (only for 2D models in 2D view)",
-            value=DEFAULTS["fov_image"],
+            value=DEFAULTS_WIDGET["fov_image"],
         ),
         label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
         model_type=dict(
@@ -734,21 +740,21 @@ def _plugin_wrapper():
             label="Model Type",
             orientation="horizontal",
             choices=model_type_choices,
-            value=DEFAULTS["model_type"],
+            value=DEFAULTS_WIDGET["model_type"],
         ),
         model2d=dict(
             widget_type="ComboBox",
             visible=False,
             label="Pre-trained Model",
             choices=models_reg[StarDist2D],
-            value=DEFAULTS["model2d"],
+            value=DEFAULTS_WIDGET["model2d"],
         ),
         model3d=dict(
             widget_type="ComboBox",
             visible=False,
             label="Pre-trained Model",
             choices=models_reg[StarDist3D],
-            value=DEFAULTS["model3d"],
+            value=DEFAULTS_WIDGET["model3d"],
         ),
         model_folder=dict(
             widget_type="FileEdit",
@@ -760,7 +766,7 @@ def _plugin_wrapper():
         norm_image=dict(
             widget_type="CheckBox",
             text="Normalize Image",
-            value=DEFAULTS["norm_image"],
+            value=DEFAULTS_WIDGET["norm_image"],
         ),
         label_nms=dict(widget_type="Label", label="<br><b>NMS Postprocessing:</b>"),
         perc_low=dict(
@@ -769,7 +775,7 @@ def _plugin_wrapper():
             min=0.0,
             max=100.0,
             step=0.1,
-            value=DEFAULTS["perc_low"],
+            value=DEFAULTS_WIDGET["perc_low"],
         ),
         perc_high=dict(
             widget_type="FloatSpinBox",
@@ -777,17 +783,17 @@ def _plugin_wrapper():
             min=0.0,
             max=100.0,
             step=0.1,
-            value=DEFAULTS["perc_high"],
+            value=DEFAULTS_WIDGET["perc_high"],
         ),
         input_scale=dict(
             widget_type="LiteralEvalLineEdit",
             label="Input image scaling",
-            value=str(DEFAULTS["input_scale"]),
+            value=DEFAULTS_WIDGET["input_scale"],
         ),
         norm_axes=dict(
             widget_type="LineEdit",
             label="Normalization Axes",
-            value=DEFAULTS["norm_axes"],
+            value=DEFAULTS_WIDGET["norm_axes"],
         ),
         prob_thresh=dict(
             widget_type="FloatSpinBox",
@@ -795,7 +801,7 @@ def _plugin_wrapper():
             min=0.0,
             max=1.0,
             step=0.05,
-            value=DEFAULTS["prob_thresh"],
+            value=DEFAULTS_WIDGET["prob_thresh"],
         ),
         nms_thresh=dict(
             widget_type="FloatSpinBox",
@@ -803,30 +809,30 @@ def _plugin_wrapper():
             min=0.0,
             max=1.0,
             step=0.05,
-            value=DEFAULTS["nms_thresh"],
+            value=DEFAULTS_WIDGET["nms_thresh"],
         ),
         output_type=dict(
             widget_type="ComboBox",
             label="Output Type",
             choices=[e.value for e in Output],
-            value=DEFAULTS["output_type"].value,
+            value=DEFAULTS_WIDGET["output_type"],
         ),
         label_adv=dict(widget_type="Label", label="<br><b>Advanced Options:</b>"),
         n_tiles=dict(
             widget_type="LiteralEvalLineEdit",
             label="Number of Tiles",
-            value=str(DEFAULTS["n_tiles"]),
+            value=DEFAULTS_WIDGET["n_tiles"],
         ),
         timelapse_opts=dict(
             widget_type="ComboBox",
             label="Time-lapse Labels ",
             choices=[e.value for e in TimelapseLabels],
-            value=DEFAULTS["timelapse_opts"].value,
+            value=DEFAULTS_WIDGET["timelapse_opts"],
         ),
         cnn_output=dict(
             widget_type="CheckBox",
             text="Show CNN Output",
-            value=DEFAULTS["cnn_output"],
+            value=DEFAULTS_WIDGET["cnn_output"],
         ),
         set_thresholds=dict(
             widget_type="PushButton",
@@ -1568,7 +1574,7 @@ def _plugin_wrapper():
     # restore defaults
     @change_handler(plugin.defaults_button, init=False)
     def restore_defaults():
-        for k, v in DEFAULTS.items():
+        for k, v in DEFAULTS_WIDGET.items():
             getattr(plugin, k).value = v
 
     # -------------------------------------------------------------------------
