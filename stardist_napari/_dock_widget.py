@@ -15,8 +15,9 @@ import numbers
 import os
 import time
 from enum import Enum
+from functools import partial
 from pathlib import Path
-from typing import List, Sequence, Union
+from typing import Any, Iterable, List, Sequence, Union
 from warnings import warn
 
 import napari
@@ -31,8 +32,10 @@ from csbdeep.utils import (
 )
 from magicgui import magicgui
 from magicgui import widgets as mw
-from magicgui.application import use_app
-from napari.qt.threading import thread_worker
+
+# from magicgui.application import use_app
+from napari.qt.threading import FunctionWorker, create_worker, thread_worker
+from napari.types import LayerDataTuple
 from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
@@ -55,6 +58,13 @@ class TimelapseLabels(Enum):
     Match = "Match to previous frame (via overlap)"
     Unique = "Unique through time"
     Separate = "Separate per frame (no processing)"
+
+
+def get_enum_member(enum: Union[Output, TimelapseLabels], value: str):
+    for e in enum:
+        if e.value == value:
+            return e
+    raise ValueError(f"no member of {enum} found with value '{value}'")
 
 
 def get_model_config_and_thresholds(path):
@@ -212,9 +222,12 @@ def move_layer_axes(layer: napari.types.FullLayerData, axes_from: str, axes_to: 
 # -------------------------------------------------------------------------
 
 
-def plugin_wrapper():
+def _plugin_wrapper():
     # delay imports until plugin is requested by user
     # -> especially those importing tensorflow (csbdeep.models.*, stardist.models.*)
+    # TODO: rethink wrapper, since not really necessary anymore with npe2,
+    #       but still want to avoid importing tensorflow if not needed
+    #       (e.g. just to open sample data)
     from csbdeep.models.pretrained import get_model_folder, get_registered_models
     from stardist.matching import group_matching_labels
     from stardist.models import StarDist2D, StarDist3D
@@ -264,17 +277,441 @@ def plugin_wrapper():
         model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
         fov_image=False,
-        input_scale="None",
+        input_scale=None,
         perc_low=1.0,
         perc_high=99.8,
         norm_axes="ZYX",
         prob_thresh=0.5,
         nms_thresh=0.4,
-        output_type=Output.Both.value,
-        n_tiles="None",
-        timelapse_opts=TimelapseLabels.Unique.value,
+        output_type=Output.Both,
+        n_tiles=None,
+        timelapse_opts=TimelapseLabels.Unique,
         cnn_output=False,
     )
+
+    # -------------------------------------------------------------------------
+
+    def plugin_function(
+        model: Union[StarDist2D, StarDist3D],
+        image: napari.layers.Image,
+        axes: str,
+        slice_image: Union[None, Iterable[slice]] = None,
+        norm_image: bool = DEFAULTS["norm_image"],
+        perc_low: float = DEFAULTS["perc_low"],
+        perc_high: float = DEFAULTS["perc_high"],
+        input_scale: Union[None, float, Iterable[float]] = DEFAULTS["input_scale"],
+        prob_thresh: float = DEFAULTS["prob_thresh"],
+        nms_thresh: float = DEFAULTS["nms_thresh"],
+        output_type: Output = DEFAULTS["output_type"],
+        n_tiles: Union[None, int, Iterable[int]] = DEFAULTS["n_tiles"],
+        norm_axes: str = DEFAULTS["norm_axes"],
+        timelapse_opts: TimelapseLabels = DEFAULTS["timelapse_opts"],
+        cnn_output: bool = DEFAULTS["cnn_output"],
+        image_data: Any = None,
+    ) -> List[LayerDataTuple]:
+
+        if image_data is None:
+            x = get_data(image)
+        else:
+            # TODO: check 'image_data'
+            x = image_data
+        axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if slice_image is None:
+            origin_in_dict = {}
+        else:
+            # TODO: check 'slice_image'
+            x = x[slice_image]
+            origin_in_dict = dict(zip(axes, tuple(s.start for s in slice_image)))
+
+        # semantic output axes of predictions
+        assert model._axes_out[-1] == "C"
+        axes_out = list(model._axes_out[:-1])
+
+        if input_scale is not None:
+            if isinstance(input_scale, numbers.Number):
+                # apply scaling to all spatial axes
+                input_scale = tuple(input_scale if a in "XYZ" else 1 for a in axes)
+            input_scale_dict = dict(zip(axes, input_scale))
+            # remove potential entry for T axis (since frames processed in outer loop)
+            input_scale = tuple(s for a, s in zip(axes, input_scale) if a != "T")
+            # print(f"input scaling: {input_scale_dict}")
+        else:
+            input_scale_dict = {}
+
+        # TODO: adjust image.scale according to shuffled axes
+
+        # enforce dense numpy array in case we are given a dask array etc
+        # -> only after (potential) field of view cropping
+        x = np.asanyarray(x)
+
+        if norm_image:
+            axes_norm = axes_check_and_normalize(norm_axes)
+            axes_norm = "".join(
+                set(axes_norm).intersection(set(axes))
+            )  # relevant axes present in input image
+            assert len(axes_norm) > 0
+            # always jointly normalize channels for RGB images
+            if ("C" in axes and image.rgb) and ("C" not in axes_norm):
+                axes_norm = axes_norm + "C"
+                warn("jointly normalizing channels of RGB input image")
+            ax = axes_dict(axes)
+            _axis = tuple(sorted(ax[a] for a in axes_norm))
+            x = normalize(x, perc_low, perc_high, axis=_axis)
+
+        if "T" in axes:
+            t = axes_dict(axes)["T"]
+            if n_tiles is not None:
+                # remove tiling value for time axis
+                n_tiles = tuple(v for i, v in enumerate(n_tiles) if i != t)
+
+            def progress(it, **kwargs):
+                # TODO: temp
+                for item in it:
+                    yield item
+
+        elif n_tiles is not None and np.prod(n_tiles) > 1:
+            n_tiles = tuple(n_tiles)
+
+            def progress(it, **kwargs):
+                # TODO: temp
+                for item in it:
+                    yield item
+
+        else:
+            progress = False
+
+        # region: progress-bar
+        # TODO: progress bar integration
+        # # TODO: progress bar (labels) often don't show up. events not processed?
+        # if "T" in axes:
+        #     app = use_app()
+        #     n_frames = x.shape[t]
+
+        #     def progress(it, **kwargs):
+        #         progress_bar.label = "StarDist Prediction (frames)"
+        #         progress_bar.range = (0, n_frames)
+        #         progress_bar.value = 0
+        #         progress_bar.show()
+        #         app.process_events()
+        #         for item in it:
+        #             yield item
+        #             progress_bar.increment()
+        #             app.process_events()
+        #         app.process_events()
+
+        # elif n_tiles is not None and np.prod(n_tiles) > 1:
+        #     app = use_app()
+
+        #     def progress(it, **kwargs):
+        #         progress_bar.label = "CNN Prediction (tiles)"
+        #         progress_bar.range = (0, kwargs.get("total", 0))
+        #         progress_bar.value = 0
+        #         progress_bar.show()
+        #         app.process_events()
+        #         for item in it:
+        #             yield item
+        #             progress_bar.increment()
+        #             app.process_events()
+        #         #
+        #         progress_bar.label = "NMS Postprocessing"
+        #         progress_bar.range = (0, 0)
+        #         app.process_events()
+
+        # else:
+        #     progress = False
+        #     progress_bar.label = "StarDist Prediction"
+        #     progress_bar.range = (0, 0)
+        #     progress_bar.show()
+        #     use_app().process_events()
+        # endregion
+
+        # region: prediction
+        if "T" in axes:
+            x_reorder = np.moveaxis(x, t, 0)
+            axes_reorder = axes.replace("T", "")
+            axes_out.insert(t, "T")
+            res = tuple(
+                zip(
+                    *tuple(
+                        model.predict_instances(
+                            _x,
+                            axes=axes_reorder,
+                            prob_thresh=prob_thresh,
+                            nms_thresh=nms_thresh,
+                            n_tiles=n_tiles,
+                            scale=input_scale,
+                            sparse=(not cnn_output),
+                            return_predict=cnn_output,
+                        )
+                        for _x in progress(x_reorder)
+                    )
+                )
+            )
+
+            if cnn_output:
+                labels, t_polys = tuple(zip(*res[0]))
+                cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
+            else:
+                labels, t_polys = res
+
+            labels = np.asarray(labels)
+
+            if isinstance(model, StarDist3D):
+                # TODO poly output support for 3D timelapse
+                polys = None
+            else:
+                polys = dict(
+                    coord=np.concatenate(
+                        tuple(
+                            np.insert(p["coord"], t, _t, axis=-2)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                    points=np.concatenate(
+                        tuple(
+                            np.insert(p["points"], t, _t, axis=-1)
+                            for _t, p in enumerate(t_polys)
+                        ),
+                        axis=0,
+                    ),
+                )
+
+            if model._is_multiclass():
+                labels_multiclass = np.stack(
+                    [
+                        create_class_labels(_y, _p["class_id"], model.config.n_classes)
+                        for _y, _p in zip(labels, t_polys)
+                    ],
+                    axis=0,
+                )
+                labels_multiclass = np.moveaxis(labels_multiclass, 0, t)
+            else:
+                labels_multiclass = None
+
+            # optionally match labels if we have more than one timepoint
+            if len(labels) > 1:
+                if timelapse_opts == TimelapseLabels.Match:
+                    # match labels in consecutive frames (-> simple IoU tracking)
+                    labels = group_matching_labels(labels)
+                elif timelapse_opts == TimelapseLabels.Unique:
+                    # make label ids unique (shift by offset)
+                    offsets = np.cumsum([len(p["points"]) for p in t_polys])
+                    for y, off in zip(labels[1:], offsets):
+                        y[y > 0] += off
+                elif timelapse_opts == TimelapseLabels.Separate:
+                    # each frame processed separately (nothing to do)
+                    pass
+                else:
+                    raise NotImplementedError(
+                        f"unknown option '{timelapse_opts}' for time-lapse labels"
+                    )
+
+            labels = np.moveaxis(labels, 0, t)
+
+            if cnn_output:
+                pred = (labels, polys), cnn_out
+            else:
+                pred = labels, polys
+
+        else:
+            # TODO: possible to run this in a way that it can be canceled?
+            pred = model.predict_instances(
+                x,
+                axes=axes,
+                prob_thresh=prob_thresh,
+                nms_thresh=nms_thresh,
+                n_tiles=n_tiles,
+                show_tile_progress=progress,
+                scale=input_scale,
+                sparse=(not cnn_output),
+                return_predict=cnn_output,
+            )
+
+            if model._is_multiclass():
+                _labels = pred[0][0] if cnn_output else pred[0]
+                _polys = pred[0][1] if cnn_output else pred[1]
+                labels_multiclass = create_class_labels(
+                    _labels, _polys["class_id"], model.config.n_classes
+                )
+            else:
+                labels_multiclass = None
+
+        # progress_bar.hide()
+        # endregion
+
+        # region: create output layer
+        layer_axes_from = "".join(axes_out)
+        layer_axes_to = axes.replace("C", "") if image.rgb else axes
+
+        # determine scale for output axes
+        scale_in_dict = dict(zip(axes, image.scale))
+        scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
+        origin_out = [origin_in_dict.get(a, 0) for a in axes_out]
+
+        # constructing the actual napari layers
+        layers = []
+        if cnn_output:
+            (labels, polys), cnn_out = pred
+            prob, dist = cnn_out[:2]
+            dist = np.moveaxis(dist, -1, 0)
+
+            assert len(model.config.grid) == len(model.config.axes) - 1
+            grid_dict = dict(zip(model.config.axes.replace("C", ""), model.config.grid))
+            # scale output axes to match input axes
+            _scale = [
+                s * grid_dict.get(a, 1) / input_scale_dict.get(a, 1)
+                for a, s in zip(axes_out, scale_out)
+            ]
+            # small translation correction if grid > 1 (since napari centers objects)
+            # TODO: this doesn't look correct
+            _translate = [
+                o + 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
+                for a, s, o in zip(axes_out, scale_out, origin_out)
+            ]
+
+            layers.append(
+                move_layer_axes(
+                    (
+                        dist,
+                        dict(
+                            name="StarDist distances",
+                            scale=[1] + _scale,
+                            translate=[0] + _translate,
+                        ),
+                        "image",
+                    ),
+                    "C" + layer_axes_from,
+                    layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
+                )
+            )
+            layers.append(
+                move_layer_axes(
+                    (
+                        prob,
+                        dict(
+                            name="StarDist probability",
+                            scale=_scale,
+                            translate=_translate,
+                        ),
+                        "image",
+                    ),
+                    layer_axes_from,
+                    layer_axes_to,
+                )
+            )
+
+            if model._is_multiclass():
+                prob_class = np.moveaxis(cnn_out[2], -1, 0)
+                layers.append(
+                    move_layer_axes(
+                        (
+                            prob_class,
+                            dict(
+                                name="StarDist class probabilities",
+                                scale=[1] + _scale,
+                                translate=[0] + _translate,
+                            ),
+                            "image",
+                        ),
+                        "C" + layer_axes_from,
+                        layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
+                    )
+                )
+        else:
+            labels, polys = pred
+
+        if output_type in (Output.Labels, Output.Both):
+
+            if model._is_multiclass():
+                # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
+                #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
+
+                layers.append(
+                    move_layer_axes(
+                        (
+                            labels_multiclass,
+                            dict(
+                                name="StarDist class labels",
+                                visible=False,
+                                scale=scale_out,
+                                opacity=0.5,
+                                translate=origin_out,
+                            ),
+                            "labels",
+                        ),
+                        layer_axes_from,
+                        layer_axes_to,
+                    )
+                )
+
+            layers.append(
+                move_layer_axes(
+                    (
+                        labels,
+                        dict(
+                            name="StarDist labels",
+                            scale=scale_out,
+                            opacity=0.5,
+                            translate=origin_out,
+                        ),
+                        "labels",
+                    ),
+                    layer_axes_from,
+                    layer_axes_to,
+                )
+            )
+
+        if output_type in (Output.Polys, Output.Both):
+
+            if isinstance(model, StarDist3D):
+                if "T" in axes:
+                    raise NotImplementedError("Polyhedra output for 3D timelapse")
+
+                n_objects = len(polys["points"])
+                surface = surface_from_polys(polys)
+                layers.append(
+                    move_layer_axes(
+                        (
+                            surface,
+                            dict(
+                                name="StarDist polyhedra",
+                                contrast_limits=(0, surface[-1].max()),
+                                scale=scale_out,
+                                colormap=label_colormap(n_objects),
+                                translate=origin_out,
+                            ),
+                            "surface",
+                        ),
+                        layer_axes_from,
+                        layer_axes_to,
+                    )
+                )
+            else:
+                # TODO: coordinates correct or need offset (0.5 or so)?
+                shapes = np.moveaxis(polys["coord"], -1, -2)
+                layers.append(
+                    move_layer_axes(
+                        (
+                            shapes,
+                            dict(
+                                name="StarDist polygons",
+                                shape_type="polygon",
+                                scale=scale_out,
+                                edge_width=0.75,
+                                edge_color="yellow",
+                                face_color=[0, 0, 0, 0],
+                                translate=origin_out,
+                            ),
+                            "shapes",
+                        ),
+                        layer_axes_from,
+                        layer_axes_to,
+                    )
+                )
+
+        return layers
 
     # -------------------------------------------------------------------------
 
@@ -345,7 +782,7 @@ def plugin_wrapper():
         input_scale=dict(
             widget_type="LiteralEvalLineEdit",
             label="Input image scaling",
-            value=DEFAULTS["input_scale"],
+            value=str(DEFAULTS["input_scale"]),
         ),
         norm_axes=dict(
             widget_type="LineEdit",
@@ -372,19 +809,19 @@ def plugin_wrapper():
             widget_type="ComboBox",
             label="Output Type",
             choices=[e.value for e in Output],
-            value=DEFAULTS["output_type"],
+            value=DEFAULTS["output_type"].value,
         ),
         label_adv=dict(widget_type="Label", label="<br><b>Advanced Options:</b>"),
         n_tiles=dict(
             widget_type="LiteralEvalLineEdit",
             label="Number of Tiles",
-            value=DEFAULTS["n_tiles"],
+            value=str(DEFAULTS["n_tiles"]),
         ),
         timelapse_opts=dict(
             widget_type="ComboBox",
             label="Time-lapse Labels ",
             choices=[e.value for e in TimelapseLabels],
-            value=DEFAULTS["timelapse_opts"],
+            value=DEFAULTS["timelapse_opts"].value,
         ),
         cnn_output=dict(
             widget_type="CheckBox",
@@ -429,7 +866,7 @@ def plugin_wrapper():
         set_thresholds,
         defaults_button,
         progress_bar: mw.ProgressBar,
-    ) -> List[napari.types.LayerDataTuple]:
+    ) -> FunctionWorker[List[LayerDataTuple]]:
 
         model = get_model(
             model_type,
@@ -442,10 +879,6 @@ def plugin_wrapper():
 
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
-
-        # semantic output axes of predictions
-        assert model._axes_out[-1] == "C"
-        axes_out = list(model._axes_out[:-1])
 
         # axes and x correspond to the original (and immutable) order of image dimensions
         # -> i.e. not affected by changing the viewer dimensions ordering, etc.
@@ -531,380 +964,27 @@ def plugin_wrapper():
             if DEBUG:
                 for sh, s, a in zip(x.shape, sl, axes):
                     print(f"{a}({sh}): {s}")
-
-            x = x[sl]
-            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
         else:
-            origin_in_dict = {}
+            sl = None
 
-        if input_scale is not None:
-            if isinstance(input_scale, numbers.Number):
-                # apply scaling to all spatial axes
-                input_scale = tuple(input_scale if a in "XYZ" else 1 for a in axes)
-            input_scale_dict = dict(zip(axes, input_scale))
-            # remove potential entry for T axis (since frames processed in outer loop)
-            input_scale = tuple(s for a, s in zip(axes, input_scale) if a != "T")
-            # print(f"input scaling: {input_scale_dict}")
-        else:
-            input_scale_dict = {}
-
-        # TODO: adjust image.scale according to shuffled axes
-
-        # enforce dense numpy array in case we are given a dask array etc
-        # -> only after (potential) field of view cropping
-        x = np.asanyarray(x)
-
-        if norm_image:
-            axes_norm = axes_check_and_normalize(norm_axes)
-            axes_norm = "".join(
-                set(axes_norm).intersection(set(axes))
-            )  # relevant axes present in input image
-            assert len(axes_norm) > 0
-            # always jointly normalize channels for RGB images
-            if ("C" in axes and image.rgb) and ("C" not in axes_norm):
-                axes_norm = axes_norm + "C"
-                warn("jointly normalizing channels of RGB input image")
-            ax = axes_dict(axes)
-            _axis = tuple(sorted(ax[a] for a in axes_norm))
-            x = normalize(x, perc_low, perc_high, axis=_axis)
-
-        # region: progress-bar
-        # TODO: progress bar (labels) often don't show up. events not processed?
-        if "T" in axes:
-            app = use_app()
-            t = axes_dict(axes)["T"]
-            n_frames = x.shape[t]
-            if n_tiles is not None:
-                # remove tiling value for time axis
-                n_tiles = tuple(v for i, v in enumerate(n_tiles) if i != t)
-
-            def progress(it, **kwargs):
-                progress_bar.label = "StarDist Prediction (frames)"
-                progress_bar.range = (0, n_frames)
-                progress_bar.value = 0
-                progress_bar.show()
-                app.process_events()
-                for item in it:
-                    yield item
-                    progress_bar.increment()
-                    app.process_events()
-                app.process_events()
-
-        elif n_tiles is not None and np.prod(n_tiles) > 1:
-            n_tiles = tuple(n_tiles)
-            app = use_app()
-
-            def progress(it, **kwargs):
-                progress_bar.label = "CNN Prediction (tiles)"
-                progress_bar.range = (0, kwargs.get("total", 0))
-                progress_bar.value = 0
-                progress_bar.show()
-                app.process_events()
-                for item in it:
-                    yield item
-                    progress_bar.increment()
-                    app.process_events()
-                #
-                progress_bar.label = "NMS Postprocessing"
-                progress_bar.range = (0, 0)
-                app.process_events()
-
-        else:
-            progress = False
-            progress_bar.label = "StarDist Prediction"
-            progress_bar.range = (0, 0)
-            progress_bar.show()
-            use_app().process_events()
-        # endregion
-
-        # region: prediction
-        if "T" in axes:
-            x_reorder = np.moveaxis(x, t, 0)
-            axes_reorder = axes.replace("T", "")
-            axes_out.insert(t, "T")
-            res = tuple(
-                zip(
-                    *tuple(
-                        model.predict_instances(
-                            _x,
-                            axes=axes_reorder,
-                            prob_thresh=prob_thresh,
-                            nms_thresh=nms_thresh,
-                            n_tiles=n_tiles,
-                            scale=input_scale,
-                            sparse=(not cnn_output),
-                            return_predict=cnn_output,
-                        )
-                        for _x in progress(x_reorder)
-                    )
-                )
-            )
-
-            if cnn_output:
-                labels, t_polys = tuple(zip(*res[0]))
-                cnn_out = tuple(np.stack(c, t) for c in tuple(zip(*res[1])))
-            else:
-                labels, t_polys = res
-
-            labels = np.asarray(labels)
-
-            if isinstance(model, StarDist3D):
-                # TODO poly output support for 3D timelapse
-                polys = None
-            else:
-                polys = dict(
-                    coord=np.concatenate(
-                        tuple(
-                            np.insert(p["coord"], t, _t, axis=-2)
-                            for _t, p in enumerate(t_polys)
-                        ),
-                        axis=0,
-                    ),
-                    points=np.concatenate(
-                        tuple(
-                            np.insert(p["points"], t, _t, axis=-1)
-                            for _t, p in enumerate(t_polys)
-                        ),
-                        axis=0,
-                    ),
-                )
-
-            if model._is_multiclass():
-                labels_multiclass = np.stack(
-                    [
-                        create_class_labels(_y, _p["class_id"], model.config.n_classes)
-                        for _y, _p in zip(labels, t_polys)
-                    ],
-                    axis=0,
-                )
-                labels_multiclass = np.moveaxis(labels_multiclass, 0, t)
-            else:
-                labels_multiclass = None
-
-            # optionally match labels if we have more than one timepoint
-            if len(labels) > 1:
-                if timelapse_opts == TimelapseLabels.Match.value:
-                    # match labels in consecutive frames (-> simple IoU tracking)
-                    labels = group_matching_labels(labels)
-                elif timelapse_opts == TimelapseLabels.Unique.value:
-                    # make label ids unique (shift by offset)
-                    offsets = np.cumsum([len(p["points"]) for p in t_polys])
-                    for y, off in zip(labels[1:], offsets):
-                        y[y > 0] += off
-                elif timelapse_opts == TimelapseLabels.Separate.value:
-                    # each frame processed separately (nothing to do)
-                    pass
-                else:
-                    raise NotImplementedError(
-                        f"unknown option '{timelapse_opts}' for time-lapse labels"
-                    )
-
-            labels = np.moveaxis(labels, 0, t)
-
-            if cnn_output:
-                pred = (labels, polys), cnn_out
-            else:
-                pred = labels, polys
-
-        else:
-            # TODO: possible to run this in a way that it can be canceled?
-            pred = model.predict_instances(
-                x,
-                axes=axes,
-                prob_thresh=prob_thresh,
-                nms_thresh=nms_thresh,
-                n_tiles=n_tiles,
-                show_tile_progress=progress,
-                scale=input_scale,
-                sparse=(not cnn_output),
-                return_predict=cnn_output,
-            )
-
-            if model._is_multiclass():
-                _labels = pred[0][0] if cnn_output else pred[0]
-                _polys = pred[0][1] if cnn_output else pred[1]
-                labels_multiclass = create_class_labels(
-                    _labels, _polys["class_id"], model.config.n_classes
-                )
-            else:
-                labels_multiclass = None
-
-        progress_bar.hide()
-        # endregion
-
-        # region: create output layer
-        layer_axes_from = "".join(axes_out)
-        layer_axes_to = axes.replace("C", "") if image.rgb else axes
-
-        # determine scale for output axes
-        scale_in_dict = dict(zip(axes, image.scale))
-        scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
-        origin_out = [origin_in_dict.get(a, 0) for a in axes_out]
-
-        # constructing the actual napari layers
-        layers = []
-        if cnn_output:
-            (labels, polys), cnn_out = pred
-            prob, dist = cnn_out[:2]
-            dist = np.moveaxis(dist, -1, 0)
-
-            assert len(model.config.grid) == len(model.config.axes) - 1
-            grid_dict = dict(zip(model.config.axes.replace("C", ""), model.config.grid))
-            # scale output axes to match input axes
-            _scale = [
-                s * grid_dict.get(a, 1) / input_scale_dict.get(a, 1)
-                for a, s in zip(axes_out, scale_out)
-            ]
-            # small translation correction if grid > 1 (since napari centers objects)
-            # TODO: this doesn't look correct
-            _translate = [
-                o + 0.5 * (grid_dict.get(a, 1) / input_scale_dict.get(a, 1) - s)
-                for a, s, o in zip(axes_out, scale_out, origin_out)
-            ]
-
-            layers.append(
-                move_layer_axes(
-                    (
-                        dist,
-                        dict(
-                            name="StarDist distances",
-                            scale=[1] + _scale,
-                            translate=[0] + _translate,
-                        ),
-                        "image",
-                    ),
-                    "C" + layer_axes_from,
-                    layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
-                )
-            )
-            layers.append(
-                move_layer_axes(
-                    (
-                        prob,
-                        dict(
-                            name="StarDist probability",
-                            scale=_scale,
-                            translate=_translate,
-                        ),
-                        "image",
-                    ),
-                    layer_axes_from,
-                    layer_axes_to,
-                )
-            )
-
-            if model._is_multiclass():
-                prob_class = np.moveaxis(cnn_out[2], -1, 0)
-                layers.append(
-                    move_layer_axes(
-                        (
-                            prob_class,
-                            dict(
-                                name="StarDist class probabilities",
-                                scale=[1] + _scale,
-                                translate=[0] + _translate,
-                            ),
-                            "image",
-                        ),
-                        "C" + layer_axes_from,
-                        layer_axes_to if "C" in layer_axes_to else "C" + layer_axes_to,
-                    )
-                )
-        else:
-            labels, polys = pred
-
-        if output_type in (Output.Labels.value, Output.Both.value):
-
-            if model._is_multiclass():
-                # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
-                #       or the class labels could be merged with the instance labels, e.g. using a different class-associated color per polygon
-
-                layers.append(
-                    move_layer_axes(
-                        (
-                            labels_multiclass,
-                            dict(
-                                name="StarDist class labels",
-                                visible=False,
-                                scale=scale_out,
-                                opacity=0.5,
-                                translate=origin_out,
-                            ),
-                            "labels",
-                        ),
-                        layer_axes_from,
-                        layer_axes_to,
-                    )
-                )
-
-            layers.append(
-                move_layer_axes(
-                    (
-                        labels,
-                        dict(
-                            name="StarDist labels",
-                            scale=scale_out,
-                            opacity=0.5,
-                            translate=origin_out,
-                        ),
-                        "labels",
-                    ),
-                    layer_axes_from,
-                    layer_axes_to,
-                )
-            )
-
-        if output_type in (Output.Polys.value, Output.Both.value):
-
-            if isinstance(model, StarDist3D):
-                if "T" in axes:
-                    raise NotImplementedError("Polyhedra output for 3D timelapse")
-
-                n_objects = len(polys["points"])
-                surface = surface_from_polys(polys)
-                layers.append(
-                    move_layer_axes(
-                        (
-                            surface,
-                            dict(
-                                name="StarDist polyhedra",
-                                contrast_limits=(0, surface[-1].max()),
-                                scale=scale_out,
-                                colormap=label_colormap(n_objects),
-                                translate=origin_out,
-                            ),
-                            "surface",
-                        ),
-                        layer_axes_from,
-                        layer_axes_to,
-                    )
-                )
-            else:
-                # TODO: coordinates correct or need offset (0.5 or so)?
-                shapes = np.moveaxis(polys["coord"], -1, -2)
-                layers.append(
-                    move_layer_axes(
-                        (
-                            shapes,
-                            dict(
-                                name="StarDist polygons",
-                                shape_type="polygon",
-                                scale=scale_out,
-                                edge_width=0.75,
-                                edge_color="yellow",
-                                face_color=[0, 0, 0, 0],
-                                translate=origin_out,
-                            ),
-                            "shapes",
-                        ),
-                        layer_axes_from,
-                        layer_axes_to,
-                    )
-                )
-
-        return layers
-
-    # endregion
+        return partial(create_worker, func=plugin_function, _start_thread=True)(
+            model=model,
+            image=image,
+            axes=axes,
+            slice_image=sl,
+            norm_image=norm_image,
+            perc_low=perc_low,
+            perc_high=perc_high,
+            input_scale=input_scale,
+            prob_thresh=prob_thresh,
+            nms_thresh=nms_thresh,
+            output_type=get_enum_member(Output, output_type),
+            n_tiles=n_tiles,
+            norm_axes=norm_axes,
+            timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
+            cnn_output=cnn_output,
+            image_data=x,
+        )
 
     # -------------------------------------------------------------------------
 
@@ -1056,8 +1136,9 @@ def plugin_wrapper():
                     plugin.output_type.native.setStyleSheet("")
                     plugin.output_type.tooltip = ""
                 if valid:
+                    shape = get_data(image).shape
                     plugin.axes.tooltip = "\n".join(
-                        [f"{a} = {s}" for a, s in zip(axes, get_data(image).shape)]
+                        [f"{a} = {s}" for a, s in zip(axes, shape)]
                     )
                     return axes, image
                 else:
@@ -1518,6 +1599,14 @@ def plugin_wrapper():
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
 
-    return plugin
+    return plugin, plugin_function
 
     # endregion
+
+
+def plugin_dock_widget():
+    return _plugin_wrapper()[0]
+
+
+def plugin_function():
+    return _plugin_wrapper()[1]

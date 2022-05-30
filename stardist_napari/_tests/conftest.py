@@ -4,7 +4,7 @@ import napari
 import pytest
 from stardist import data
 
-from stardist_napari import make_dock_widget
+from stardist_napari import make_dock_widget, make_dock_widget_function
 
 # # def pytest_sessionstart(*args, **kwargs):
 # def pytest_configure(*args, **kwargs):
@@ -18,6 +18,11 @@ from stardist_napari import make_dock_widget
 @pytest.fixture(scope="function")
 def plugin():
     return make_dock_widget()
+
+
+@pytest.fixture(scope="function")
+def call_plugin():
+    return make_dock_widget_function()
 
 
 @pytest.fixture(scope="session")
