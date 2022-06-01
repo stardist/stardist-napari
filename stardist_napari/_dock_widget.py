@@ -7,18 +7,17 @@ TODO:
   - https://github.com/napari/napari/issues/2487
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
-- try progress bar via @thread_workers
+- alternative normalization options besides percentile (e.g. absolute min/max values for patho images)
 """
 
 import functools
 import numbers
-import os
 import time
+import warnings
+from concurrent.futures import Future
 from enum import Enum
-from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence, Union
-from warnings import warn
 
 import napari
 import numpy as np
@@ -31,11 +30,9 @@ from csbdeep.utils import (
     normalize,
 )
 from magicgui import magicgui
-from magicgui import widgets as mw
-
-# from magicgui.application import use_app
-from napari.qt.threading import FunctionWorker, create_worker, thread_worker
+from napari.qt.threading import thread_worker
 from napari.types import LayerDataTuple
+from napari.utils import progress
 from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
@@ -297,7 +294,7 @@ def _plugin_wrapper():
 
     # -------------------------------------------------------------------------
 
-    def plugin_function(
+    def plugin_function_generator(
         model: Union[StarDist2D, StarDist3D],
         image: napari.layers.Image,
         axes: str,
@@ -360,7 +357,7 @@ def _plugin_wrapper():
             # always jointly normalize channels for RGB images
             if ("C" in axes and image.rgb) and ("C" not in axes_norm):
                 axes_norm = axes_norm + "C"
-                warn("jointly normalizing channels of RGB input image")
+                warnings.warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
             _axis = tuple(sorted(ax[a] for a in axes_norm))
             x = normalize(x, perc_low, perc_high, axis=_axis)
@@ -371,89 +368,56 @@ def _plugin_wrapper():
                 # remove tiling value for time axis
                 n_tiles = tuple(v for i, v in enumerate(n_tiles) if i != t)
 
-            def progress(it, **kwargs):
-                # TODO: temp
-                for item in it:
-                    yield item
-
-        elif n_tiles is not None and np.prod(n_tiles) > 1:
+        if n_tiles is not None and np.prod(n_tiles) > 1:
             n_tiles = tuple(n_tiles)
+            num_tiles = np.prod(n_tiles)
 
             def progress(it, **kwargs):
-                # TODO: temp
+                nonlocal num_tiles
+                if "total" in kwargs:
+                    num_tiles = kwargs["total"]
                 for item in it:
                     yield item
 
         else:
             progress = False
 
-        # region: progress-bar
-        # TODO: progress bar integration
-        # # TODO: progress bar (labels) often don't show up. events not processed?
-        # if "T" in axes:
-        #     app = use_app()
-        #     n_frames = x.shape[t]
-
-        #     def progress(it, **kwargs):
-        #         progress_bar.label = "StarDist Prediction (frames)"
-        #         progress_bar.range = (0, n_frames)
-        #         progress_bar.value = 0
-        #         progress_bar.show()
-        #         app.process_events()
-        #         for item in it:
-        #             yield item
-        #             progress_bar.increment()
-        #             app.process_events()
-        #         app.process_events()
-
-        # elif n_tiles is not None and np.prod(n_tiles) > 1:
-        #     app = use_app()
-
-        #     def progress(it, **kwargs):
-        #         progress_bar.label = "CNN Prediction (tiles)"
-        #         progress_bar.range = (0, kwargs.get("total", 0))
-        #         progress_bar.value = 0
-        #         progress_bar.show()
-        #         app.process_events()
-        #         for item in it:
-        #             yield item
-        #             progress_bar.increment()
-        #             app.process_events()
-        #         #
-        #         progress_bar.label = "NMS Postprocessing"
-        #         progress_bar.range = (0, 0)
-        #         app.process_events()
-
-        # else:
-        #     progress = False
-        #     progress_bar.label = "StarDist Prediction"
-        #     progress_bar.range = (0, 0)
-        #     progress_bar.show()
-        #     use_app().process_events()
-        # endregion
-
         # region: prediction
+        def progress_msg(val):
+            if isinstance(val, str):
+                if val == "tile":
+                    return val, (1, num_tiles)
+                else:
+                    return val, None
+            else:
+                return None
+
         if "T" in axes:
             x_reorder = np.moveaxis(x, t, 0)
             axes_reorder = axes.replace("T", "")
             axes_out.insert(t, "T")
-            res = tuple(
-                zip(
-                    *tuple(
-                        model.predict_instances(
-                            _x,
-                            axes=axes_reorder,
-                            prob_thresh=prob_thresh,
-                            nms_thresh=nms_thresh,
-                            n_tiles=n_tiles,
-                            scale=input_scale,
-                            sparse=(not cnn_output),
-                            return_predict=cnn_output,
-                        )
-                        for _x in progress(x_reorder)
-                    )
-                )
-            )
+            res = []
+            n_frames = len(x_reorder)
+            for _x in x_reorder:
+                out = None
+                for out in model._predict_instances_generator(
+                    _x,
+                    axes=axes_reorder,
+                    prob_thresh=prob_thresh,
+                    nms_thresh=nms_thresh,
+                    n_tiles=n_tiles,
+                    show_tile_progress=progress,
+                    scale=input_scale,
+                    sparse=(not cnn_output),
+                    return_predict=cnn_output,
+                ):
+                    msg = progress_msg(out)
+                    if msg is not None:
+                        yield msg
+
+                res.append(out)
+                yield "time", (1, n_frames)
+            res = tuple(zip(*res))
 
             if cnn_output:
                 labels, t_polys = tuple(zip(*res[0]))
@@ -522,8 +486,8 @@ def _plugin_wrapper():
                 pred = labels, polys
 
         else:
-            # TODO: possible to run this in a way that it can be canceled?
-            pred = model.predict_instances(
+            pred = None
+            for pred in model._predict_instances_generator(
                 x,
                 axes=axes,
                 prob_thresh=prob_thresh,
@@ -533,7 +497,10 @@ def _plugin_wrapper():
                 scale=input_scale,
                 sparse=(not cnn_output),
                 return_predict=cnn_output,
-            )
+            ):
+                msg = progress_msg(pred)
+                if msg is not None:
+                    yield msg
 
             if model._is_multiclass():
                 _labels = pred[0][0] if cnn_output else pred[0]
@@ -543,8 +510,6 @@ def _plugin_wrapper():
                 )
             else:
                 labels_multiclass = None
-
-        # progress_bar.hide()
         # endregion
 
         # region: create output layer
@@ -717,7 +682,15 @@ def _plugin_wrapper():
                     )
                 )
 
-        return layers
+        # endregion
+        yield layers
+
+    @functools.wraps(plugin_function_generator)
+    def plugin_function(*args, **kwargs):
+        r = None
+        for r in plugin_function_generator(*args, **kwargs):
+            pass
+        return r
 
     # -------------------------------------------------------------------------
 
@@ -839,7 +812,6 @@ def _plugin_wrapper():
             text="Set optimized postprocessing thresholds (for selected model)",
         ),
         defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
-        progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
         persist=not NOPERSIST,
         call_button=True,
@@ -871,8 +843,7 @@ def _plugin_wrapper():
         cnn_output,
         set_thresholds,
         defaults_button,
-        progress_bar: mw.ProgressBar,
-    ) -> FunctionWorker[List[LayerDataTuple]]:
+    ) -> Future[List[LayerDataTuple]]:
 
         model = get_model(
             model_type,
@@ -889,6 +860,7 @@ def _plugin_wrapper():
         # axes and x correspond to the original (and immutable) order of image dimensions
         # -> i.e. not affected by changing the viewer dimensions ordering, etc.
 
+        # region: field of view
         if fov_image and model.config.n_dim == 2 and viewer.dims.ndisplay == 2:
             # it's all a big mess based on shaky assumptions...
             if viewer is None:
@@ -972,25 +944,104 @@ def _plugin_wrapper():
                     print(f"{a}({sh}): {s}")
         else:
             sl = None
+        # endregion
 
-        return partial(create_worker, func=plugin_function, _start_thread=True)(
-            model=model,
-            image=image,
-            axes=axes,
-            slice_image=sl,
-            norm_image=norm_image,
-            perc_low=perc_low,
-            perc_high=perc_high,
-            input_scale=input_scale,
-            prob_thresh=prob_thresh,
-            nms_thresh=nms_thresh,
-            output_type=get_enum_member(Output, output_type),
-            n_tiles=n_tiles,
-            norm_axes=norm_axes,
-            timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
-            cnn_output=cnn_output,
-            image_data=x,
+        # region: progress bars
+        uses_tiling = n_tiles is not None and np.prod(n_tiles) > 1
+        pbar_time = progress(total=0, desc="StarDist Time-lapse") if "T" in axes else None
+
+        def make_pbar(desc="StarDist Prediction"):
+            return progress(
+                total=(np.prod(n_tiles) if uses_tiling else 0),
+                desc=desc,
+                nest_under=pbar_time,
+            )
+
+        def set_pbar(pbar, total=None, desc=None):
+            if isinstance(desc, str) and pbar.desc != f"{desc}: ":
+                pbar.set_description(desc)
+            if isinstance(total, int) and pbar.total != total:
+                pbar.total = total
+
+        pbar = make_pbar()
+
+        def show_activity_dock(state=True):
+            if uses_tiling or "T" in axes:
+                try:
+                    with warnings.catch_warnings():
+                        # suppress FutureWarning for now: https://github.com/napari/napari/issues/4598
+                        warnings.simplefilter(action="ignore", category=FutureWarning)
+                        viewer.window._status_bar._toggle_activity_dock(state)
+                except AttributeError:
+                    print(f"show_activity_dock failed")
+
+        def progress_update(value):
+            nonlocal pbar
+            m, args = value
+            if m == "time":
+                i, n = args
+                set_pbar(pbar_time, total=n)
+                pbar_time.update(i)
+            elif m == "predict":
+                if uses_tiling:
+                    pbar.close()
+                    pbar = make_pbar()
+                else:
+                    set_pbar(pbar, desc="StarDist Prediction", total=0)
+            elif m == "tile":
+                i, n = args
+                set_pbar(pbar, total=n)
+                pbar.update(i)
+            elif m == "nms":
+                set_pbar(pbar, desc="StarDist Postprocessing", total=0)
+
+        def progress_close(v):
+            pbar.close()
+            if pbar_time is not None:
+                pbar_time.close()
+            show_activity_dock(False)
+
+        # endregion
+
+        # TODO: cancel button (cf. https://napari.zulipchat.com/#narrow/stream/309872-plugins/topic/Testing.20plugins/near/284578152)
+
+        @thread_worker(
+            connect={
+                "yielded": progress_update,
+                "returned": progress_close,
+                "started": show_activity_dock,
+            },
+            start_thread=False,
         )
+        def run():
+            r = None
+            for r in plugin_function_generator(
+                model=model,
+                image=image,
+                axes=axes,
+                slice_image=sl,
+                norm_image=norm_image,
+                perc_low=perc_low,
+                perc_high=perc_high,
+                input_scale=input_scale,
+                prob_thresh=prob_thresh,
+                nms_thresh=nms_thresh,
+                output_type=get_enum_member(Output, output_type),
+                n_tiles=n_tiles,
+                norm_axes=norm_axes,
+                timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
+                cnn_output=cnn_output,
+                image_data=x,
+            ):
+                if isinstance(r, tuple) and len(r) > 1 and isinstance(r[0], str):
+                    yield r
+            return r
+
+        future: Future[LayerDataTuple] = Future()
+        worker = run()
+        worker.returned.connect(future.set_result)
+        worker.start()
+        return future
 
     # -------------------------------------------------------------------------
 
@@ -1152,7 +1203,7 @@ def _plugin_wrapper():
                         err = str(err)
                         err = err[:-1] if err.endswith(".") else err
                         plugin.axes.tooltip = err
-                        # warn(err) # alternative to tooltip (gui doesn't show up in ipython)
+                        # warnings.warn(err) # alternative to tooltip (gui doesn't show up in ipython)
                     else:
                         plugin.axes.tooltip = ""
 
@@ -1167,7 +1218,7 @@ def _plugin_wrapper():
                         err = str(err)
                         err = err[:-1] if err.endswith(".") else err
                         plugin.norm_axes.tooltip = err
-                        # warn(err) # alternative to tooltip (gui doesn't show up in ipython)
+                        # warnings.warn(err) # alternative to tooltip (gui doesn't show up in ipython)
                     else:
                         plugin.norm_axes.tooltip = ""
 
@@ -1401,11 +1452,7 @@ def _plugin_wrapper():
 
         if key not in model_configs:
 
-            @thread_worker
-            def _get_model_folder():
-                return get_model_folder(*key)
-
-            def _process_model_folder(path):
+            def process_model_folder(path):
                 try:
                     _config, _thresholds = get_model_config_and_thresholds(path)
                     model_configs[key] = _config
@@ -1413,19 +1460,17 @@ def _plugin_wrapper():
                         model_threshs[key] = _thresholds
                 finally:
                     select_model(key)
-                    plugin.progress_bar.hide()
 
-            worker = _get_model_folder()
-            worker.returned.connect(_process_model_folder)
-            worker.start()
+            @thread_worker(
+                progress=dict(total=0, desc="Obtaining model"),
+                connect=dict(returned=process_model_folder),
+                start_thread=True,
+            )
+            def obtain_model_folder():
+                return get_model_folder(*key)
 
-            # delay showing progress bar -> won't show up if model already downloaded
-            # TODO: hacky -> better way to do this?
-            time.sleep(0.1)
             plugin.call_button.enabled = False
-            plugin.progress_bar.label = "Downloading model"
-            plugin.progress_bar.show()
-
+            obtain_model_folder()
         else:
             select_model(key)
 
@@ -1599,8 +1644,8 @@ def _plugin_wrapper():
     #     w = layout.itemAt(i).widget()
     #     w.setStyleSheet("""QWidget {font-size:11px;}""")
 
-    # push 'call_button' and 'progress_bar' to bottom
-    layout.insertStretch(layout.count() - 2)
+    # push 'call_button' to bottom
+    layout.insertStretch(layout.count() - 1)
 
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
