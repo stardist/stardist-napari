@@ -37,7 +37,7 @@ from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
-from . import DEBUG, NOPERSIST
+from . import DEBUG, NOPERSIST, NOTHREADS
 
 # region utils
 # -------------------------------------------------------------------------
@@ -372,9 +372,11 @@ def _plugin_wrapper():
             n_tiles = tuple(n_tiles)
             num_tiles = np.prod(n_tiles)
 
+            # this is used as tqdm replacement for predict_instances
             def progress(it, **kwargs):
                 nonlocal num_tiles
                 if "total" in kwargs:
+                    # get number of actual tiles (which may differ from 'np.prod(n_tiles)')
                     num_tiles = kwargs["total"]
                 for item in it:
                     yield item
@@ -384,6 +386,8 @@ def _plugin_wrapper():
 
         # region: prediction
         def progress_msg(val):
+            # take yielded value from model._predict_instances_generator
+            # and convert to progress "message" that is yielded to caller
             if isinstance(val, str):
                 if val == "tile":
                     return val, (1, num_tiles)
@@ -687,6 +691,8 @@ def _plugin_wrapper():
 
     @functools.wraps(plugin_function_generator)
     def plugin_function(*args, **kwargs):
+        # convention: last "yield" is the actual output that would have
+        #             been "return"ed if this was a regular function
         r = None
         for r in plugin_function_generator(*args, **kwargs):
             pass
@@ -966,6 +972,7 @@ def _plugin_wrapper():
         pbar = make_pbar()
 
         def show_activity_dock(state=True):
+            # show/hide activity dock if there is actual progress to see
             if uses_tiling or "T" in axes:
                 try:
                     with warnings.catch_warnings():
@@ -995,7 +1002,7 @@ def _plugin_wrapper():
             elif m == "nms":
                 set_pbar(pbar, desc="StarDist Postprocessing", total=0)
 
-        def progress_close(v):
+        def progress_close():
             pbar.close()
             if pbar_time is not None:
                 pbar_time.close()
@@ -1005,42 +1012,61 @@ def _plugin_wrapper():
 
         # TODO: cancel button (cf. https://napari.zulipchat.com/#narrow/stream/309872-plugins/topic/Testing.20plugins/near/284578152)
 
-        @thread_worker(
-            connect={
-                "yielded": progress_update,
-                "returned": progress_close,
-                "started": show_activity_dock,
-            },
-            start_thread=False,
-        )
-        def run():
-            r = None
-            for r in plugin_function_generator(
-                model=model,
-                image=image,
-                axes=axes,
-                slice_image=sl,
-                norm_image=norm_image,
-                perc_low=perc_low,
-                perc_high=perc_high,
-                input_scale=input_scale,
-                prob_thresh=prob_thresh,
-                nms_thresh=nms_thresh,
-                output_type=get_enum_member(Output, output_type),
-                n_tiles=n_tiles,
-                norm_axes=norm_axes,
-                timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
-                cnn_output=cnn_output,
-                image_data=x,
-            ):
-                if isinstance(r, tuple) and len(r) > 1 and isinstance(r[0], str):
-                    yield r
-            return r
-
         future: Future[LayerDataTuple] = Future()
-        worker = run()
-        worker.returned.connect(future.set_result)
-        worker.start()
+
+        computation_generator = plugin_function_generator(
+            model=model,
+            image=image,
+            axes=axes,
+            slice_image=sl,
+            norm_image=norm_image,
+            perc_low=perc_low,
+            perc_high=perc_high,
+            input_scale=input_scale,
+            prob_thresh=prob_thresh,
+            nms_thresh=nms_thresh,
+            output_type=get_enum_member(Output, output_type),
+            n_tiles=n_tiles,
+            norm_axes=norm_axes,
+            timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
+            cnn_output=cnn_output,
+            image_data=x,
+        )
+
+        def is_progress_msg(r):
+            return isinstance(r, tuple) and len(r) > 1 and isinstance(r[0], str)
+
+        if NOTHREADS:
+
+            show_activity_dock()
+            r = None
+            for r in computation_generator:
+                if is_progress_msg(r):
+                    progress_update(r)
+            future.set_result(r)
+            progress_close()
+
+        else:
+
+            @thread_worker(
+                connect={
+                    "yielded": progress_update,
+                    "returned": progress_close,
+                    "started": show_activity_dock,
+                },
+                start_thread=False,
+            )
+            def run():
+                r = None
+                for r in computation_generator:
+                    if is_progress_msg(r):
+                        yield r
+                return r
+
+            worker = run()
+            worker.returned.connect(future.set_result)
+            worker.start()
+
         return future
 
     # -------------------------------------------------------------------------
@@ -1461,13 +1487,23 @@ def _plugin_wrapper():
                 finally:
                     select_model(key)
 
-            @thread_worker(
-                progress=dict(total=0, desc="Obtaining model"),
-                connect=dict(returned=process_model_folder),
-                start_thread=True,
-            )
-            def obtain_model_folder():
-                return get_model_folder(*key)
+            progress_kwargs = dict(total=0, desc="Obtaining model")
+
+            if NOTHREADS:
+
+                def obtain_model_folder():
+                    with progress(**progress_kwargs):
+                        process_model_folder(get_model_folder(*key))
+
+            else:
+
+                @thread_worker(
+                    progress=progress_kwargs,
+                    connect={"returned": process_model_folder},
+                    start_thread=True,
+                )
+                def obtain_model_folder():
+                    return get_model_folder(*key)
 
             plugin.call_button.enabled = False
             obtain_model_folder()
