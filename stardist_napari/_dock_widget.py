@@ -40,10 +40,8 @@ from qtpy.QtWidgets import QSizePolicy
 
 from . import DEBUG, NOPERSIST, NOTHREADS
 
-
 # proxy type because Future is not subscriptable in Python 3.8 or lower
-class _Future(object):
-    __class_getitem__ = classmethod(types.GenericAlias)
+_Future = List
 
 
 # register proxy types with magicgui
