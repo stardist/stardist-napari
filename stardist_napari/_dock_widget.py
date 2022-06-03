@@ -13,11 +13,12 @@ TODO:
 import functools
 import numbers
 import time
+import types
 import warnings
 from concurrent.futures import Future
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence, Union
+from typing import Any, Iterable, List, Sequence, Type, Union
 
 import napari
 import numpy as np
@@ -29,15 +30,25 @@ from csbdeep.utils import (
     move_image_axes,
     normalize,
 )
-from magicgui import magicgui
+from magicgui import magicgui, register_type
 from napari.qt.threading import thread_worker
 from napari.types import LayerDataTuple
-from napari.utils import progress
+from napari.utils import _magicgui, progress
 from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
 from . import DEBUG, NOPERSIST, NOTHREADS
+
+
+# proxy type because Future is not subscriptable in Python 3.8 or lower
+class _Future(object):
+    __class_getitem__ = classmethod(types.GenericAlias)
+
+
+# register proxy types with magicgui
+register_type(_Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data)
+
 
 # region utils
 # -------------------------------------------------------------------------
@@ -57,7 +68,7 @@ class TimelapseLabels(Enum):
     Separate = "Separate per frame (no processing)"
 
 
-def get_enum_member(enum: Union[Output, TimelapseLabels], value: str):
+def get_enum_member(enum: Union[Type[Output], Type[TimelapseLabels]], value: str):
     for e in enum:
         if e.value == value:
             return e
@@ -849,7 +860,7 @@ def _plugin_wrapper():
         cnn_output,
         set_thresholds,
         defaults_button,
-    ) -> Future[List[LayerDataTuple]]:
+    ) -> _Future[List[LayerDataTuple]]:
 
         model = get_model(
             model_type,

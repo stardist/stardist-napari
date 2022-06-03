@@ -45,7 +45,7 @@ setup(
         "Framework :: napari",
     ],
     install_requires=[
-        "stardist>0.8.2",
+        "stardist>=0.8.3",
         'tensorflow;  platform_system!="Darwin" or platform_machine!="arm64"',
         'tensorflow-macos;  platform_system=="Darwin" and platform_machine=="arm64"',
         "napari>=0.4.13",
