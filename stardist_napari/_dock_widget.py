@@ -1021,7 +1021,7 @@ def _plugin_wrapper():
 
         # TODO: cancel button (cf. https://napari.zulipchat.com/#narrow/stream/309872-plugins/topic/Testing.20plugins/near/284578152)
 
-        future: Future[LayerDataTuple] = Future()
+        future = Future()
 
         computation_generator = plugin_function_generator(
             model=model,
