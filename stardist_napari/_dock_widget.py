@@ -7,17 +7,18 @@ TODO:
   - https://github.com/napari/napari/issues/2487
 - add general tooltip help/info messages
 - option to use CPU or GPU, limit tensorflow GPU memory ('allow_growth'?)
-- try progress bar via @thread_workers
+- alternative normalization options besides percentile (e.g. absolute min/max values for patho images)
 """
 
 import functools
 import numbers
-import os
+import sys
 import time
+import warnings
+from concurrent.futures import Future
 from enum import Enum
 from pathlib import Path
-from typing import List, Sequence, Union
-from warnings import warn
+from typing import Any, Iterable, List, Sequence, Type, Union
 
 import napari
 import numpy as np
@@ -29,15 +30,24 @@ from csbdeep.utils import (
     move_image_axes,
     normalize,
 )
-from magicgui import magicgui
-from magicgui import widgets as mw
-from magicgui.application import use_app
+from magicgui import magicgui, register_type
 from napari.qt.threading import thread_worker
+from napari.types import LayerDataTuple
+from napari.utils import _magicgui, progress
 from napari.utils.colormaps import label_colormap
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
-from . import DEBUG, NOPERSIST
+from . import DEBUG, NOPERSIST, NOTHREADS
+
+_Future = Future
+if sys.version_info < (3, 9):
+    # proxy type because Future is not subscriptable in Python 3.8 or lower
+    _Future = List
+    # register proxy type with magicgui
+    register_type(
+        _Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data
+    )
 
 # region utils
 # -------------------------------------------------------------------------
@@ -55,6 +65,13 @@ class TimelapseLabels(Enum):
     Match = "Match to previous frame (via overlap)"
     Unique = "Unique through time"
     Separate = "Separate per frame (no processing)"
+
+
+def get_enum_member(enum: Union[Type[Output], Type[TimelapseLabels]], value: str):
+    for e in enum:
+        if e.value == value:
+            return e
+    raise ValueError(f"no member of {enum} found with value '{value}'")
 
 
 def get_model_config_and_thresholds(path):
@@ -212,9 +229,12 @@ def move_layer_axes(layer: napari.types.FullLayerData, axes_from: str, axes_to: 
 # -------------------------------------------------------------------------
 
 
-def plugin_wrapper():
+def _plugin_wrapper():
     # delay imports until plugin is requested by user
     # -> especially those importing tensorflow (csbdeep.models.*, stardist.models.*)
+    # TODO: rethink wrapper, since not really necessary anymore with npe2,
+    #       but still want to avoid importing tensorflow if not needed
+    #       (e.g. just to open sample data)
     from csbdeep.models.pretrained import get_model_folder, get_registered_models
     from stardist.matching import group_matching_labels
     from stardist.models import StarDist2D, StarDist3D
@@ -264,278 +284,62 @@ def plugin_wrapper():
         model3d=models_reg[StarDist3D][0][1],
         norm_image=True,
         fov_image=False,
-        input_scale="None",
+        input_scale=None,
         perc_low=1.0,
         perc_high=99.8,
         norm_axes="ZYX",
         prob_thresh=0.5,
         nms_thresh=0.4,
-        output_type=Output.Both.value,
-        n_tiles="None",
-        timelapse_opts=TimelapseLabels.Unique.value,
+        output_type=Output.Both,
+        n_tiles=None,
+        timelapse_opts=TimelapseLabels.Unique,
         cnn_output=False,
     )
 
+    DEFAULTS_WIDGET = DEFAULTS.copy()
+    DEFAULTS_WIDGET["output_type"] = DEFAULTS_WIDGET["output_type"].value
+    DEFAULTS_WIDGET["timelapse_opts"] = DEFAULTS_WIDGET["timelapse_opts"].value
+    DEFAULTS_WIDGET["input_scale"] = str(DEFAULTS_WIDGET["input_scale"])
+    DEFAULTS_WIDGET["n_tiles"] = str(DEFAULTS_WIDGET["n_tiles"])
+
     # -------------------------------------------------------------------------
 
-    logo = abspath(__file__, "resources/stardist_logo_napari.png")
-
-    @magicgui(
-        label_head=dict(
-            widget_type="Label", label=f'<h1><img src="{logo}">StarDist</h1>'
-        ),
-        image=dict(label="Input Image"),
-        axes=dict(widget_type="LineEdit", label="Image Axes"),
-        fov_image=dict(
-            widget_type="CheckBox",
-            text="Predict on field of view (only for 2D models in 2D view)",
-            value=DEFAULTS["fov_image"],
-        ),
-        label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
-        model_type=dict(
-            widget_type="RadioButtons",
-            label="Model Type",
-            orientation="horizontal",
-            choices=model_type_choices,
-            value=DEFAULTS["model_type"],
-        ),
-        model2d=dict(
-            widget_type="ComboBox",
-            visible=False,
-            label="Pre-trained Model",
-            choices=models_reg[StarDist2D],
-            value=DEFAULTS["model2d"],
-        ),
-        model3d=dict(
-            widget_type="ComboBox",
-            visible=False,
-            label="Pre-trained Model",
-            choices=models_reg[StarDist3D],
-            value=DEFAULTS["model3d"],
-        ),
-        model_folder=dict(
-            widget_type="FileEdit",
-            visible=False,
-            label="Custom Model",
-            mode="d",
-        ),
-        model_axes=dict(widget_type="LineEdit", label="Model Axes", value=""),
-        norm_image=dict(
-            widget_type="CheckBox",
-            text="Normalize Image",
-            value=DEFAULTS["norm_image"],
-        ),
-        label_nms=dict(widget_type="Label", label="<br><b>NMS Postprocessing:</b>"),
-        perc_low=dict(
-            widget_type="FloatSpinBox",
-            label="Percentile low",
-            min=0.0,
-            max=100.0,
-            step=0.1,
-            value=DEFAULTS["perc_low"],
-        ),
-        perc_high=dict(
-            widget_type="FloatSpinBox",
-            label="Percentile high",
-            min=0.0,
-            max=100.0,
-            step=0.1,
-            value=DEFAULTS["perc_high"],
-        ),
-        input_scale=dict(
-            widget_type="LiteralEvalLineEdit",
-            label="Input image scaling",
-            value=DEFAULTS["input_scale"],
-        ),
-        norm_axes=dict(
-            widget_type="LineEdit",
-            label="Normalization Axes",
-            value=DEFAULTS["norm_axes"],
-        ),
-        prob_thresh=dict(
-            widget_type="FloatSpinBox",
-            label="Probability/Score Threshold",
-            min=0.0,
-            max=1.0,
-            step=0.05,
-            value=DEFAULTS["prob_thresh"],
-        ),
-        nms_thresh=dict(
-            widget_type="FloatSpinBox",
-            label="Overlap Threshold",
-            min=0.0,
-            max=1.0,
-            step=0.05,
-            value=DEFAULTS["nms_thresh"],
-        ),
-        output_type=dict(
-            widget_type="ComboBox",
-            label="Output Type",
-            choices=[e.value for e in Output],
-            value=DEFAULTS["output_type"],
-        ),
-        label_adv=dict(widget_type="Label", label="<br><b>Advanced Options:</b>"),
-        n_tiles=dict(
-            widget_type="LiteralEvalLineEdit",
-            label="Number of Tiles",
-            value=DEFAULTS["n_tiles"],
-        ),
-        timelapse_opts=dict(
-            widget_type="ComboBox",
-            label="Time-lapse Labels ",
-            choices=[e.value for e in TimelapseLabels],
-            value=DEFAULTS["timelapse_opts"],
-        ),
-        cnn_output=dict(
-            widget_type="CheckBox",
-            text="Show CNN Output",
-            value=DEFAULTS["cnn_output"],
-        ),
-        set_thresholds=dict(
-            widget_type="PushButton",
-            text="Set optimized postprocessing thresholds (for selected model)",
-        ),
-        defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
-        progress_bar=dict(label=" ", min=0, max=0, visible=False),
-        layout="vertical",
-        persist=not NOPERSIST,
-        call_button=True,
-    )
-    def plugin(
-        viewer: Union[napari.Viewer, None],
-        label_head,
+    def plugin_function_generator(
+        model: Union[StarDist2D, StarDist3D],
         image: napari.layers.Image,
-        axes,
-        fov_image,
-        label_nn,
-        model_type,
-        model2d,
-        model3d,
-        model_folder,
-        model_axes,
-        norm_image,
-        perc_low,
-        perc_high,
-        input_scale,
-        label_nms,
-        prob_thresh,
-        nms_thresh,
-        output_type,
-        label_adv,
-        n_tiles,
-        norm_axes,
-        timelapse_opts,
-        cnn_output,
-        set_thresholds,
-        defaults_button,
-        progress_bar: mw.ProgressBar,
-    ) -> List[napari.types.LayerDataTuple]:
+        axes: str,
+        slice_image: Union[None, Iterable[slice]] = None,
+        norm_image: bool = DEFAULTS["norm_image"],
+        perc_low: float = DEFAULTS["perc_low"],
+        perc_high: float = DEFAULTS["perc_high"],
+        input_scale: Union[None, float, Iterable[float]] = DEFAULTS["input_scale"],
+        prob_thresh: float = DEFAULTS["prob_thresh"],
+        nms_thresh: float = DEFAULTS["nms_thresh"],
+        output_type: Output = DEFAULTS["output_type"],
+        n_tiles: Union[None, int, Iterable[int]] = DEFAULTS["n_tiles"],
+        norm_axes: str = DEFAULTS["norm_axes"],
+        timelapse_opts: TimelapseLabels = DEFAULTS["timelapse_opts"],
+        cnn_output: bool = DEFAULTS["cnn_output"],
+        image_data: Any = None,
+    ) -> List[LayerDataTuple]:
 
-        model = get_model(
-            model_type,
-            {
-                StarDist2D: model2d,
-                StarDist3D: model3d,
-                CUSTOM_MODEL: model_folder,
-            }[model_type],
-        )
-
-        x = get_data(image)
+        if image_data is None:
+            x = get_data(image)
+        else:
+            # TODO: check 'image_data'
+            x = image_data
         axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        if slice_image is None:
+            origin_in_dict = {}
+        else:
+            # TODO: check 'slice_image'
+            x = x[slice_image]
+            origin_in_dict = dict(zip(axes, tuple(s.start for s in slice_image)))
 
         # semantic output axes of predictions
         assert model._axes_out[-1] == "C"
         axes_out = list(model._axes_out[:-1])
-
-        # axes and x correspond to the original (and immutable) order of image dimensions
-        # -> i.e. not affected by changing the viewer dimensions ordering, etc.
-
-        if fov_image and model.config.n_dim == 2 and viewer.dims.ndisplay == 2:
-            # it's all a big mess based on shaky assumptions...
-            if viewer is None:
-                raise RuntimeError("viewer is None")
-            if image.rgb and axes[-1] != "C":
-                raise RuntimeError("rgb image must have channels as last axis/dimension")
-
-            def get_slice_not_displayed(vdim, idim):
-                # vdim: dimension index wrt. viewer
-                # idim: dimension index wrt. image
-                if axes[idim] == "T":
-                    # if timelapse, return visible/selected frame
-                    return slice(
-                        viewer.dims.current_step[vdim],
-                        1 + viewer.dims.current_step[vdim],
-                    )
-                elif axes[idim] == "C":
-                    # if channel, return entire dimension
-                    return slice(0, x.shape[idim])
-                else:
-                    return None
-
-            corner_pixels = (
-                corner_pixels_multiscale(image)
-                if image.multiscale
-                else image.corner_pixels
-            )
-            n_corners = corner_pixels.shape[1]
-            n_corners <= x.ndim or _raise(RuntimeError("assumption violated"))
-
-            # map viewer dimension index to image dimension index
-            n_dims = x.ndim - (1 if image.rgb else 0)
-            viewer_dim_to_image_dim = dict(
-                zip(np.arange(viewer.dims.ndim)[-n_dims:], range(n_dims))
-            )
-            # map viewer dimension index to corner pixel
-            viewer_dim_to_corner = dict(
-                zip(
-                    np.arange(viewer.dims.ndim)[-n_corners:],
-                    zip(corner_pixels[0], corner_pixels[1]),
-                )
-            )
-            # if DEBUG:
-            #     print(f"{corner_pixels = }")
-            #     print(f"{viewer_dim_to_image_dim = }")
-            #     print(f"{viewer_dim_to_corner = }")
-            #     print(f"{viewer.dims.displayed = }")
-
-            sl = [None] * x.ndim
-            for vdim in range(viewer.dims.ndim):
-                idim = viewer_dim_to_image_dim.get(vdim)
-                c = viewer_dim_to_corner.get(vdim)
-                # DEBUG and print(
-                #     f"{vdim=}, {idim=}{f'/{axes[idim]}' if idim is not None else ''}, {c=}"
-                # )
-                if c is not None:
-                    if vdim in viewer.dims.displayed:
-                        fr, to = c
-                        sl[idim] = None if fr == to else slice(fr, to)
-                    else:
-                        sl[idim] = get_slice_not_displayed(vdim, idim)
-                else:
-                    # assert vdim in viewer.dims.not_displayed
-                    if idim is not None:
-                        sl[idim] = get_slice_not_displayed(vdim, idim)
-
-            if image.rgb:
-                idim = x.ndim - 1
-                # set channel slice here, since channel of rgb image not part of viewer dimensions
-                assert sl[idim] is None and axes[idim] == "C"
-                sl[idim] = get_slice_not_displayed(None, idim)
-
-            sl = tuple(sl)
-
-            invalid_axes = "".join(a for s, a in zip(sl, axes) if s is None)
-            if len(invalid_axes) > 0:
-                raise ValueError(f"Invalid field of view range for axes {invalid_axes}")
-
-            if DEBUG:
-                for sh, s, a in zip(x.shape, sl, axes):
-                    print(f"{a}({sh}): {s}")
-
-            x = x[sl]
-            origin_in_dict = dict(zip(axes, tuple(s.start for s in sl)))
-        else:
-            origin_in_dict = {}
 
         if input_scale is not None:
             if isinstance(input_scale, numbers.Number):
@@ -563,82 +367,71 @@ def plugin_wrapper():
             # always jointly normalize channels for RGB images
             if ("C" in axes and image.rgb) and ("C" not in axes_norm):
                 axes_norm = axes_norm + "C"
-                warn("jointly normalizing channels of RGB input image")
+                warnings.warn("jointly normalizing channels of RGB input image")
             ax = axes_dict(axes)
             _axis = tuple(sorted(ax[a] for a in axes_norm))
             x = normalize(x, perc_low, perc_high, axis=_axis)
 
-        # region: progress-bar
-        # TODO: progress bar (labels) often don't show up. events not processed?
         if "T" in axes:
-            app = use_app()
             t = axes_dict(axes)["T"]
-            n_frames = x.shape[t]
             if n_tiles is not None:
                 # remove tiling value for time axis
                 n_tiles = tuple(v for i, v in enumerate(n_tiles) if i != t)
 
-            def progress(it, **kwargs):
-                progress_bar.label = "StarDist Prediction (frames)"
-                progress_bar.range = (0, n_frames)
-                progress_bar.value = 0
-                progress_bar.show()
-                app.process_events()
-                for item in it:
-                    yield item
-                    progress_bar.increment()
-                    app.process_events()
-                app.process_events()
-
-        elif n_tiles is not None and np.prod(n_tiles) > 1:
+        if n_tiles is not None and np.prod(n_tiles) > 1:
             n_tiles = tuple(n_tiles)
-            app = use_app()
+            num_tiles = np.prod(n_tiles)
 
+            # this is used as tqdm replacement for predict_instances
             def progress(it, **kwargs):
-                progress_bar.label = "CNN Prediction (tiles)"
-                progress_bar.range = (0, kwargs.get("total", 0))
-                progress_bar.value = 0
-                progress_bar.show()
-                app.process_events()
+                nonlocal num_tiles
+                if "total" in kwargs:
+                    # get number of actual tiles (which may differ from 'np.prod(n_tiles)')
+                    num_tiles = kwargs["total"]
                 for item in it:
                     yield item
-                    progress_bar.increment()
-                    app.process_events()
-                #
-                progress_bar.label = "NMS Postprocessing"
-                progress_bar.range = (0, 0)
-                app.process_events()
 
         else:
             progress = False
-            progress_bar.label = "StarDist Prediction"
-            progress_bar.range = (0, 0)
-            progress_bar.show()
-            use_app().process_events()
-        # endregion
 
         # region: prediction
+        def progress_msg(val):
+            # take yielded value from model._predict_instances_generator
+            # and convert to progress "message" that is yielded to caller
+            if isinstance(val, str):
+                if val == "tile":
+                    return val, (1, num_tiles)
+                else:
+                    return val, None
+            else:
+                return None
+
         if "T" in axes:
             x_reorder = np.moveaxis(x, t, 0)
             axes_reorder = axes.replace("T", "")
             axes_out.insert(t, "T")
-            res = tuple(
-                zip(
-                    *tuple(
-                        model.predict_instances(
-                            _x,
-                            axes=axes_reorder,
-                            prob_thresh=prob_thresh,
-                            nms_thresh=nms_thresh,
-                            n_tiles=n_tiles,
-                            scale=input_scale,
-                            sparse=(not cnn_output),
-                            return_predict=cnn_output,
-                        )
-                        for _x in progress(x_reorder)
-                    )
-                )
-            )
+            res = []
+            n_frames = len(x_reorder)
+            for _x in x_reorder:
+                out = None
+                for out in model._predict_instances_generator(
+                    _x,
+                    axes=axes_reorder,
+                    prob_thresh=prob_thresh,
+                    nms_thresh=nms_thresh,
+                    n_tiles=n_tiles,
+                    show_tile_progress=progress,
+                    scale=input_scale,
+                    sparse=(not cnn_output),
+                    return_predict=cnn_output,
+                ):
+                    msg = progress_msg(out)
+                    if msg is not None:
+                        yield msg
+
+                res.append(out)
+                yield "time", (1, n_frames)
+            res = tuple(zip(*res))
 
             if cnn_output:
                 labels, t_polys = tuple(zip(*res[0]))
@@ -683,15 +476,15 @@ def plugin_wrapper():
 
             # optionally match labels if we have more than one timepoint
             if len(labels) > 1:
-                if timelapse_opts == TimelapseLabels.Match.value:
+                if timelapse_opts == TimelapseLabels.Match:
                     # match labels in consecutive frames (-> simple IoU tracking)
                     labels = group_matching_labels(labels)
-                elif timelapse_opts == TimelapseLabels.Unique.value:
+                elif timelapse_opts == TimelapseLabels.Unique:
                     # make label ids unique (shift by offset)
                     offsets = np.cumsum([len(p["points"]) for p in t_polys])
                     for y, off in zip(labels[1:], offsets):
                         y[y > 0] += off
-                elif timelapse_opts == TimelapseLabels.Separate.value:
+                elif timelapse_opts == TimelapseLabels.Separate:
                     # each frame processed separately (nothing to do)
                     pass
                 else:
@@ -707,8 +500,8 @@ def plugin_wrapper():
                 pred = labels, polys
 
         else:
-            # TODO: possible to run this in a way that it can be canceled?
-            pred = model.predict_instances(
+            pred = None
+            for pred in model._predict_instances_generator(
                 x,
                 axes=axes,
                 prob_thresh=prob_thresh,
@@ -718,7 +511,10 @@ def plugin_wrapper():
                 scale=input_scale,
                 sparse=(not cnn_output),
                 return_predict=cnn_output,
-            )
+            ):
+                msg = progress_msg(pred)
+                if msg is not None:
+                    yield msg
 
             if model._is_multiclass():
                 _labels = pred[0][0] if cnn_output else pred[0]
@@ -728,8 +524,6 @@ def plugin_wrapper():
                 )
             else:
                 labels_multiclass = None
-
-        progress_bar.hide()
         # endregion
 
         # region: create output layer
@@ -813,7 +607,7 @@ def plugin_wrapper():
         else:
             labels, polys = pred
 
-        if output_type in (Output.Labels.value, Output.Both.value):
+        if output_type in (Output.Labels, Output.Both):
 
             if model._is_multiclass():
                 # TODO: class labels could be treated like instance labels, i.e. can be shown as label images or polygons / polyhedra,
@@ -854,7 +648,7 @@ def plugin_wrapper():
                 )
             )
 
-        if output_type in (Output.Polys.value, Output.Both.value):
+        if output_type in (Output.Polys, Output.Both):
 
             if isinstance(model, StarDist3D):
                 if "T" in axes:
@@ -902,9 +696,388 @@ def plugin_wrapper():
                     )
                 )
 
-        return layers
+        # endregion
+        yield layers
 
-    # endregion
+    @functools.wraps(plugin_function_generator)
+    def plugin_function(*args, **kwargs):
+        # convention: last "yield" is the actual output that would have
+        #             been "return"ed if this was a regular function
+        r = None
+        for r in plugin_function_generator(*args, **kwargs):
+            pass
+        return r
+
+    # -------------------------------------------------------------------------
+
+    logo = abspath(__file__, "resources/stardist_logo_napari.png")
+
+    @magicgui(
+        label_head=dict(
+            widget_type="Label", label=f'<h1><img src="{logo}">StarDist</h1>'
+        ),
+        image=dict(label="Input Image"),
+        axes=dict(widget_type="LineEdit", label="Image Axes"),
+        fov_image=dict(
+            widget_type="CheckBox",
+            text="Predict on field of view (only for 2D models in 2D view)",
+            value=DEFAULTS_WIDGET["fov_image"],
+        ),
+        label_nn=dict(widget_type="Label", label="<br><b>Neural Network Prediction:</b>"),
+        model_type=dict(
+            widget_type="RadioButtons",
+            label="Model Type",
+            orientation="horizontal",
+            choices=model_type_choices,
+            value=DEFAULTS_WIDGET["model_type"],
+        ),
+        model2d=dict(
+            widget_type="ComboBox",
+            visible=False,
+            label="Pre-trained Model",
+            choices=models_reg[StarDist2D],
+            value=DEFAULTS_WIDGET["model2d"],
+        ),
+        model3d=dict(
+            widget_type="ComboBox",
+            visible=False,
+            label="Pre-trained Model",
+            choices=models_reg[StarDist3D],
+            value=DEFAULTS_WIDGET["model3d"],
+        ),
+        model_folder=dict(
+            widget_type="FileEdit",
+            visible=False,
+            label="Custom Model",
+            mode="d",
+        ),
+        model_axes=dict(widget_type="LineEdit", label="Model Axes", value=""),
+        norm_image=dict(
+            widget_type="CheckBox",
+            text="Normalize Image",
+            value=DEFAULTS_WIDGET["norm_image"],
+        ),
+        label_nms=dict(widget_type="Label", label="<br><b>NMS Postprocessing:</b>"),
+        perc_low=dict(
+            widget_type="FloatSpinBox",
+            label="Percentile low",
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            value=DEFAULTS_WIDGET["perc_low"],
+        ),
+        perc_high=dict(
+            widget_type="FloatSpinBox",
+            label="Percentile high",
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            value=DEFAULTS_WIDGET["perc_high"],
+        ),
+        input_scale=dict(
+            widget_type="LiteralEvalLineEdit",
+            label="Input image scaling",
+            value=DEFAULTS_WIDGET["input_scale"],
+        ),
+        norm_axes=dict(
+            widget_type="LineEdit",
+            label="Normalization Axes",
+            value=DEFAULTS_WIDGET["norm_axes"],
+        ),
+        prob_thresh=dict(
+            widget_type="FloatSpinBox",
+            label="Probability/Score Threshold",
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            value=DEFAULTS_WIDGET["prob_thresh"],
+        ),
+        nms_thresh=dict(
+            widget_type="FloatSpinBox",
+            label="Overlap Threshold",
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            value=DEFAULTS_WIDGET["nms_thresh"],
+        ),
+        output_type=dict(
+            widget_type="ComboBox",
+            label="Output Type",
+            choices=[e.value for e in Output],
+            value=DEFAULTS_WIDGET["output_type"],
+        ),
+        label_adv=dict(widget_type="Label", label="<br><b>Advanced Options:</b>"),
+        n_tiles=dict(
+            widget_type="LiteralEvalLineEdit",
+            label="Number of Tiles",
+            value=DEFAULTS_WIDGET["n_tiles"],
+        ),
+        timelapse_opts=dict(
+            widget_type="ComboBox",
+            label="Time-lapse Labels ",
+            choices=[e.value for e in TimelapseLabels],
+            value=DEFAULTS_WIDGET["timelapse_opts"],
+        ),
+        cnn_output=dict(
+            widget_type="CheckBox",
+            text="Show CNN Output",
+            value=DEFAULTS_WIDGET["cnn_output"],
+        ),
+        set_thresholds=dict(
+            widget_type="PushButton",
+            text="Set optimized postprocessing thresholds (for selected model)",
+        ),
+        defaults_button=dict(widget_type="PushButton", text="Restore Defaults"),
+        layout="vertical",
+        persist=not NOPERSIST,
+        call_button=True,
+    )
+    def plugin(
+        viewer: Union[napari.Viewer, None],
+        label_head,
+        image: napari.layers.Image,
+        axes,
+        fov_image,
+        label_nn,
+        model_type,
+        model2d,
+        model3d,
+        model_folder,
+        model_axes,
+        norm_image,
+        perc_low,
+        perc_high,
+        input_scale,
+        label_nms,
+        prob_thresh,
+        nms_thresh,
+        output_type,
+        label_adv,
+        n_tiles,
+        norm_axes,
+        timelapse_opts,
+        cnn_output,
+        set_thresholds,
+        defaults_button,
+    ) -> _Future[List[LayerDataTuple]]:
+
+        model = get_model(
+            model_type,
+            {
+                StarDist2D: model2d,
+                StarDist3D: model3d,
+                CUSTOM_MODEL: model_folder,
+            }[model_type],
+        )
+
+        x = get_data(image)
+        axes = axes_check_and_normalize(axes, length=x.ndim)
+
+        # axes and x correspond to the original (and immutable) order of image dimensions
+        # -> i.e. not affected by changing the viewer dimensions ordering, etc.
+
+        # region: field of view
+        if fov_image and model.config.n_dim == 2 and viewer.dims.ndisplay == 2:
+            # it's all a big mess based on shaky assumptions...
+            if viewer is None:
+                raise RuntimeError("viewer is None")
+            if image.rgb and axes[-1] != "C":
+                raise RuntimeError("rgb image must have channels as last axis/dimension")
+
+            def get_slice_not_displayed(vdim, idim):
+                # vdim: dimension index wrt. viewer
+                # idim: dimension index wrt. image
+                if axes[idim] == "T":
+                    # if timelapse, return visible/selected frame
+                    return slice(
+                        viewer.dims.current_step[vdim],
+                        1 + viewer.dims.current_step[vdim],
+                    )
+                elif axes[idim] == "C":
+                    # if channel, return entire dimension
+                    return slice(0, x.shape[idim])
+                else:
+                    return None
+
+            corner_pixels = (
+                corner_pixels_multiscale(image)
+                if image.multiscale
+                else image.corner_pixels
+            )
+            n_corners = corner_pixels.shape[1]
+            n_corners <= x.ndim or _raise(RuntimeError("assumption violated"))
+
+            # map viewer dimension index to image dimension index
+            n_dims = x.ndim - (1 if image.rgb else 0)
+            viewer_dim_to_image_dim = dict(
+                zip(np.arange(viewer.dims.ndim)[-n_dims:], range(n_dims))
+            )
+            # map viewer dimension index to corner pixel
+            viewer_dim_to_corner = dict(
+                zip(
+                    np.arange(viewer.dims.ndim)[-n_corners:],
+                    zip(corner_pixels[0], corner_pixels[1]),
+                )
+            )
+            # if DEBUG:
+            #     print(f"{corner_pixels = }")
+            #     print(f"{viewer_dim_to_image_dim = }")
+            #     print(f"{viewer_dim_to_corner = }")
+            #     print(f"{viewer.dims.displayed = }")
+
+            sl = [None] * x.ndim
+            for vdim in range(viewer.dims.ndim):
+                idim = viewer_dim_to_image_dim.get(vdim)
+                c = viewer_dim_to_corner.get(vdim)
+                # DEBUG and print(
+                #     f"{vdim=}, {idim=}{f'/{axes[idim]}' if idim is not None else ''}, {c=}"
+                # )
+                if c is not None:
+                    if vdim in viewer.dims.displayed:
+                        fr, to = c
+                        sl[idim] = None if fr == to else slice(fr, to)
+                    else:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+                else:
+                    # assert vdim in viewer.dims.not_displayed
+                    if idim is not None:
+                        sl[idim] = get_slice_not_displayed(vdim, idim)
+
+            if image.rgb:
+                idim = x.ndim - 1
+                # set channel slice here, since channel of rgb image not part of viewer dimensions
+                assert sl[idim] is None and axes[idim] == "C"
+                sl[idim] = get_slice_not_displayed(None, idim)
+
+            sl = tuple(sl)
+
+            invalid_axes = "".join(a for s, a in zip(sl, axes) if s is None)
+            if len(invalid_axes) > 0:
+                raise ValueError(f"Invalid field of view range for axes {invalid_axes}")
+
+            if DEBUG:
+                for sh, s, a in zip(x.shape, sl, axes):
+                    print(f"{a}({sh}): {s}")
+        else:
+            sl = None
+        # endregion
+
+        # region: progress bars
+        uses_tiling = n_tiles is not None and np.prod(n_tiles) > 1
+        pbar_time = progress(total=0, desc="StarDist Time-lapse") if "T" in axes else None
+
+        def make_pbar(desc="StarDist Prediction"):
+            return progress(
+                total=(np.prod(n_tiles) if uses_tiling else 0),
+                desc=desc,
+                nest_under=pbar_time,
+            )
+
+        def set_pbar(pbar, total=None, desc=None):
+            if isinstance(desc, str) and pbar.desc != f"{desc}: ":
+                pbar.set_description(desc)
+            if isinstance(total, int) and pbar.total != total:
+                pbar.total = total
+
+        pbar = make_pbar()
+
+        def show_activity_dock(state=True):
+            # show/hide activity dock if there is actual progress to see
+            if uses_tiling or "T" in axes:
+                try:
+                    with warnings.catch_warnings():
+                        # suppress FutureWarning for now: https://github.com/napari/napari/issues/4598
+                        warnings.simplefilter(action="ignore", category=FutureWarning)
+                        viewer.window._status_bar._toggle_activity_dock(state)
+                except AttributeError:
+                    print(f"show_activity_dock failed")
+
+        def progress_update(value):
+            nonlocal pbar
+            m, args = value
+            if m == "time":
+                i, n = args
+                set_pbar(pbar_time, total=n)
+                pbar_time.update(i)
+            elif m == "predict":
+                if uses_tiling:
+                    pbar.close()
+                    pbar = make_pbar()
+                else:
+                    set_pbar(pbar, desc="StarDist Prediction", total=0)
+            elif m == "tile":
+                i, n = args
+                set_pbar(pbar, total=n)
+                pbar.update(i)
+            elif m == "nms":
+                set_pbar(pbar, desc="StarDist Postprocessing", total=0)
+
+        def progress_close():
+            pbar.close()
+            if pbar_time is not None:
+                pbar_time.close()
+            show_activity_dock(False)
+
+        # endregion
+
+        # TODO: cancel button (cf. https://napari.zulipchat.com/#narrow/stream/309872-plugins/topic/Testing.20plugins/near/284578152)
+
+        future = Future()
+
+        computation_generator = plugin_function_generator(
+            model=model,
+            image=image,
+            axes=axes,
+            slice_image=sl,
+            norm_image=norm_image,
+            perc_low=perc_low,
+            perc_high=perc_high,
+            input_scale=input_scale,
+            prob_thresh=prob_thresh,
+            nms_thresh=nms_thresh,
+            output_type=get_enum_member(Output, output_type),
+            n_tiles=n_tiles,
+            norm_axes=norm_axes,
+            timelapse_opts=get_enum_member(TimelapseLabels, timelapse_opts),
+            cnn_output=cnn_output,
+            image_data=x,
+        )
+
+        def is_progress_msg(r):
+            return isinstance(r, tuple) and len(r) > 1 and isinstance(r[0], str)
+
+        if NOTHREADS:
+
+            show_activity_dock()
+            r = None
+            for r in computation_generator:
+                if is_progress_msg(r):
+                    progress_update(r)
+            future.set_result(r)
+            progress_close()
+
+        else:
+
+            @thread_worker(
+                connect={
+                    "yielded": progress_update,
+                    "returned": progress_close,
+                    "started": show_activity_dock,
+                },
+                start_thread=False,
+            )
+            def run():
+                r = None
+                for r in computation_generator:
+                    if is_progress_msg(r):
+                        yield r
+                return r
+
+            worker = run()
+            worker.returned.connect(future.set_result)
+            worker.start()
+
+        return future
 
     # -------------------------------------------------------------------------
 
@@ -1056,8 +1229,9 @@ def plugin_wrapper():
                     plugin.output_type.native.setStyleSheet("")
                     plugin.output_type.tooltip = ""
                 if valid:
+                    shape = get_data(image).shape
                     plugin.axes.tooltip = "\n".join(
-                        [f"{a} = {s}" for a, s in zip(axes, get_data(image).shape)]
+                        [f"{a} = {s}" for a, s in zip(axes, shape)]
                     )
                     return axes, image
                 else:
@@ -1065,7 +1239,7 @@ def plugin_wrapper():
                         err = str(err)
                         err = err[:-1] if err.endswith(".") else err
                         plugin.axes.tooltip = err
-                        # warn(err) # alternative to tooltip (gui doesn't show up in ipython)
+                        # warnings.warn(err) # alternative to tooltip (gui doesn't show up in ipython)
                     else:
                         plugin.axes.tooltip = ""
 
@@ -1080,7 +1254,7 @@ def plugin_wrapper():
                         err = str(err)
                         err = err[:-1] if err.endswith(".") else err
                         plugin.norm_axes.tooltip = err
-                        # warn(err) # alternative to tooltip (gui doesn't show up in ipython)
+                        # warnings.warn(err) # alternative to tooltip (gui doesn't show up in ipython)
                     else:
                         plugin.norm_axes.tooltip = ""
 
@@ -1314,11 +1488,7 @@ def plugin_wrapper():
 
         if key not in model_configs:
 
-            @thread_worker
-            def _get_model_folder():
-                return get_model_folder(*key)
-
-            def _process_model_folder(path):
+            def process_model_folder(path):
                 try:
                     _config, _thresholds = get_model_config_and_thresholds(path)
                     model_configs[key] = _config
@@ -1326,19 +1496,27 @@ def plugin_wrapper():
                         model_threshs[key] = _thresholds
                 finally:
                     select_model(key)
-                    plugin.progress_bar.hide()
 
-            worker = _get_model_folder()
-            worker.returned.connect(_process_model_folder)
-            worker.start()
+            progress_kwargs = dict(total=0, desc="Obtaining model")
 
-            # delay showing progress bar -> won't show up if model already downloaded
-            # TODO: hacky -> better way to do this?
-            time.sleep(0.1)
+            if NOTHREADS:
+
+                def obtain_model_folder():
+                    with progress(**progress_kwargs):
+                        process_model_folder(get_model_folder(*key))
+
+            else:
+
+                @thread_worker(
+                    progress=progress_kwargs,
+                    connect={"returned": process_model_folder},
+                    start_thread=True,
+                )
+                def obtain_model_folder():
+                    return get_model_folder(*key)
+
             plugin.call_button.enabled = False
-            plugin.progress_bar.label = "Downloading model"
-            plugin.progress_bar.show()
-
+            obtain_model_folder()
         else:
             select_model(key)
 
@@ -1487,7 +1665,7 @@ def plugin_wrapper():
     # restore defaults
     @change_handler(plugin.defaults_button, init=False)
     def restore_defaults():
-        for k, v in DEFAULTS.items():
+        for k, v in DEFAULTS_WIDGET.items():
             getattr(plugin, k).value = v
 
     # -------------------------------------------------------------------------
@@ -1512,12 +1690,20 @@ def plugin_wrapper():
     #     w = layout.itemAt(i).widget()
     #     w.setStyleSheet("""QWidget {font-size:11px;}""")
 
-    # push 'call_button' and 'progress_bar' to bottom
-    layout.insertStretch(layout.count() - 2)
+    # push 'call_button' to bottom
+    layout.insertStretch(layout.count() - 1)
 
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
 
-    return plugin
+    return plugin, plugin_function
 
     # endregion
+
+
+def plugin_dock_widget():
+    return _plugin_wrapper()[0]
+
+
+def plugin_function():
+    return _plugin_wrapper()[1]

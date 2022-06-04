@@ -37,6 +37,7 @@ runs:
       run: |
         python -W ignore -c "import sys; sys.path.remove(''); import stardist_napari; print(f'pytest_dir={stardist_napari.__path__[0]}')" >> $GITHUB_ENV
         echo "STARDIST_NAPARI_NOPERSIST=true" >> $GITHUB_ENV
+        echo "STARDIST_NAPARI_NOTHREADS=true" >> $GITHUB_ENV
 
     # run tests inside the installed stardist_napari package
     - name: Test with pytest

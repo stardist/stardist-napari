@@ -1,23 +1,18 @@
-import os
-
 import napari
 import pytest
 from stardist import data
 
-from stardist_napari import make_dock_widget
-
-# # def pytest_sessionstart(*args, **kwargs):
-# def pytest_configure(*args, **kwargs):
-#     os.environ["STARDIST_NAPARI_NOPERSIST"] = "true"
-
-
-# def pytest_sessionfinish(*args, **kwargs):
-#     del os.environ["STARDIST_NAPARI_NOPERSIST"]
+from stardist_napari import make_dock_widget, make_dock_widget_function
 
 
 @pytest.fixture(scope="function")
 def plugin():
     return make_dock_widget()
+
+
+@pytest.fixture(scope="function")
+def call_plugin():
+    return make_dock_widget_function()
 
 
 @pytest.fixture(scope="session")
