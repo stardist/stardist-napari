@@ -1,1 +1,1 @@
-__version__ = ".".join(map(str, (2022, 4, 8)))
+__version__ = ".".join(map(str, (2022, 6, 4)))
