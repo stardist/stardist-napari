@@ -12,8 +12,8 @@ TODO:
 
 import functools
 import numbers
+import sys
 import time
-import types
 import warnings
 from concurrent.futures import Future
 from enum import Enum
@@ -40,13 +40,14 @@ from qtpy.QtWidgets import QSizePolicy
 
 from . import DEBUG, NOPERSIST, NOTHREADS
 
-# proxy type because Future is not subscriptable in Python 3.8 or lower
-_Future = List
-
-
-# register proxy types with magicgui
-register_type(_Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data)
-
+_Future = Future
+if sys.version_info < (3, 9):
+    # proxy type because Future is not subscriptable in Python 3.8 or lower
+    _Future = List
+    # register proxy type with magicgui
+    register_type(
+        _Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data
+    )
 
 # region utils
 # -------------------------------------------------------------------------

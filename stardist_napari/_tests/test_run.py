@@ -4,7 +4,7 @@ import pytest
 from scipy.ndimage import rotate
 from stardist.models import StarDist2D, StarDist3D
 
-from stardist_napari._dock_widget import CUSTOM_MODEL, Output, TimelapseLabels
+from stardist_napari._dock_widget import Output, TimelapseLabels
 
 
 def test_fluo_2d(call_plugin, nuclei_2d):
