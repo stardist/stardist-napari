@@ -140,7 +140,8 @@ def corner_pixels_multiscale(layer):
     factor = layer.downsample_factors[layer.data_level]
     scaled_corner = np.round(layer.corner_pixels * factor).astype(int)
     shape_max = layer.data[0].shape
-    for i in range(len(shape_max)):
+    # if layer.rgb -> len(shape_max) == 1 + len(factor)
+    for i in range(len(factor)):
         scaled_corner[:, i] = np.clip(scaled_corner[:, i], 0, shape_max[i])
     return scaled_corner
 
