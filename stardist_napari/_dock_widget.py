@@ -35,6 +35,7 @@ from napari.qt.threading import thread_worker
 from napari.types import LayerDataTuple
 from napari.utils import _magicgui, progress
 from napari.utils.colormaps import label_colormap
+from packaging import version
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy
 
@@ -48,6 +49,15 @@ if sys.version_info < (3, 9):
     register_type(
         _Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data
     )
+
+SLOW_SHAPE_LAYER = True
+if version.parse(napari.__version__) >= version.parse("0.4.16"):
+    try:
+        import triangle
+
+        SLOW_SHAPE_LAYER = False
+    except:
+        pass
 
 # region utils
 # -------------------------------------------------------------------------
@@ -1217,7 +1227,8 @@ def _plugin_wrapper():
                     valid=(valid or (image is None and (axes is None or len(axes) == 0))),
                 )
                 if (
-                    valid
+                    SLOW_SHAPE_LAYER
+                    and valid
                     and "T" in axes
                     and plugin.output_type.value
                     in (Output.Polys.value, Output.Both.value)
