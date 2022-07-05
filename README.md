@@ -32,19 +32,19 @@ All plugin activity is shown in the napari *activity dock*, which can be shown/h
 
 ### Inputs
 
-The plugin does perform input validation, i.e. it will disable the `Run` button if it detects a problem with the selected inputs. Problematic input fields are highlighted <span style="border-radius: 3px; color: white; padding: 2px; background-color: lightcoral;">like this</span>, and their [*tooltips*](https://en.wikipedia.org/wiki/Tooltip) typically explain what the problem is. Some error messages are shown at the bottom in napari's status bar, such as for incompatibilities between multiple input fields. Input fields with warnings (also explained via tooltips) are highlighted <span style="border-radius: 3px; color: white; padding: 2px; background-color: orange;">like this</span>.
+The plugin does perform input validation, i.e. it will disable the `Run` button if it detects a problem with the selected inputs. Problematic input fields are highlighted with a "lightcoral" background color ![](https://via.placeholder.com/15/f08080/f08080.png), and their [*tooltips*](https://en.wikipedia.org/wiki/Tooltip) typically explain what the problem is. Some error messages are shown at the bottom in napari's status bar, such as for incompatibilities between multiple input fields. Input fields with warnings (also explained via tooltips) are highlighted with an orange background color ![](https://via.placeholder.com/15/ffa500/ffa500.png).
 
-**Input Image**: Select a napari layer of type `Image` as the input.
+**Input Image**: Select a napari layer of type `Image` as the input.  
 *Tooltip:* Shows the shape of the image.
 
-**Image Axes**: String that describes the semantic image axes and their order, e.g. `YX` for a 2D image. This parameter is automatically chosen (i.e. guessed) when a new input image is selected and should work in most cases. Permissible axis values are: `X` (width/columns), `Y` (height/rows), `Z` (depth/planes), `C` (channels), `T` (frames/time).
+**Image Axes**: String that describes the semantic image axes and their order, e.g. `YX` for a 2D image. This parameter is automatically chosen (i.e. guessed) when a new input image is selected and should work in most cases. Permissible axis values are: `X` (width/columns), `Y` (height/rows), `Z` (depth/planes), `C` (channels), `T` (frames/time).  
 *Tooltip:* Shows the mapping of semantic axes to the shape of the selected input image.
 
 **Predict on field of view (only for 2D models in 2D view)**: If enabled, the StarDist prediction is only applied to the current field of view of the napari viewer. As the name of this checkbox indicates, this only works for 2D StarDist models and when the napari viewer is in 2D viewing mode. The checkbox is not even shown if those conditions are not met.
 
 #### *Neural Network Prediction*
 
-**Model Type**: Choice whether to use registered pre-trained models (`2D`, `3D`) or provide a path to a model folder (`Custom 2D/3D`). Based on this choice, either the input for *Pre-trained Model* or *Custom Model* is shown below.
+**Model Type**: Choice whether to use registered pre-trained models (`2D`, `3D`) or provide a path to a model folder (`Custom 2D/3D`). Based on this choice, either the input for *Pre-trained Model* or *Custom Model* is shown below.  
 (Further information regarding pre-trained models: [how to register your own model](https://nbviewer.org/github/CSBDeep/CSBDeep/blob/master/examples/other/technical.ipynb#Registry-for-pretrained-models), [model registration in StarDist](https://github.com/stardist/stardist/blob/f73cdc44f718d36844b38c1f1662dbb66d157182/stardist/models/__init__.py#L17-L29).)
 
 **Pre-trained Model**: Select a registered pre-trained model from a list. The first time a model is selected, it is downloaded and cached locally.
@@ -59,7 +59,7 @@ The plugin does perform input validation, i.e. it will disable the `Run` button 
 
 **Percentile high**: Percentile value of input pixel distribution that is mapped to 1 (~max value). If there aren't any outlier pixels in your image, you may use percentile `100` to do a standard [min-max image normalization](https://www.codecademy.com/article/normalization).
 
-**Input image scaling**: Number or list of numbers (one per input axis) to scale the input image before prediction and rescale the output accordingly. For example, a value of `0.5` indicates that all spatial axes are downscaled to half their size before prediction, and that the outputs are scaled to double their size. This is useful to adapt to different object sizes in the input image.
+**Input image scaling**: Number or list of numbers (one per input axis) to scale the input image before prediction and rescale the output accordingly. For example, a value of `0.5` indicates that all spatial axes are downscaled to half their size before prediction, and that the outputs are scaled to double their size. This is useful to adapt to different object sizes in the input image.  
 *Tooltip:* Shows the mapping of scale values to the semantic axes of the selected input image.
 
 #### *NMS Postprocessing*
@@ -72,10 +72,10 @@ The plugin does perform input validation, i.e. it will disable the `Run` button 
 
 #### *Advanced Options*
 
-**Number of Tiles**: String `None` (to disable tiling) or list of integer numbers (one per axis of input image) to determine how the input image is tiled before the CNN prediction is computed on each tile individually. This is needed to avoid (GPU) memory issues that can occur for large input images. Note that the NMS postprocessing is still run only once with candidates from the predictions of all image tiles.
+**Number of Tiles**: String `None` (to disable tiling) or list of integer numbers (one per axis of input image) to determine how the input image is tiled before the CNN prediction is computed on each tile individually. This is needed to avoid (GPU) memory issues that can occur for large input images. Note that the NMS postprocessing is still run only once with candidates from the predictions of all image tiles.  
 *Tooltip:* Shows the mapping of tile values to the semantic axes of the selected input image.
 
-**Normalization Axes**: String of semantic axes which are jointly normalized (if they are present in the input image). For example, the default value `ZYX` indicates that all spatial axes are always normalized together; if an image has multiple channels, the pixels will be normalized separately per channel (e.g. this is what typically makes sense for fluorescence microscopy where channels are independent). On the other hand, the channels in RGB color images typically need to be normalized jointly, hence using `ZYXC` makes sense in this case. Note: if an image is explicitly opened with `rgb=True` in napari, the channels are automatically normalized together.
+**Normalization Axes**: String of semantic axes which are jointly normalized (if they are present in the input image). For example, the default value `ZYX` indicates that all spatial axes are always normalized together; if an image has multiple channels, the pixels will be normalized separately per channel (e.g. this is what typically makes sense for fluorescence microscopy where channels are independent). On the other hand, the channels in RGB color images typically need to be normalized jointly, hence using `ZYXC` makes sense in this case. Note: if an image is explicitly opened with `rgb=True` in napari, the channels are automatically normalized together.  
 *Tooltip:* Shows a brief explanation.
 
 **Time-lapse Labels**: If the input is a time-lapse/movie, each frame is first independently processed by StarDist. If `Separate per frame (no processing)` is chosen, the object ids in the label images of each frame are not modified, i.e. they are consecutive integers that always start at 1. Selecting `Unique through time` will cause object ids to be unique over time, i.e. the smallest object id in a given frame is larger than the largest object id of the previous frame. Finally, choosing `Match to previous frame (via overlap)` will perform a simple form of [greedy](https://en.wikipedia.org/wiki/Greedy_algorithm) matching/tracking, where object ids are propagated from one frame to the next based on object overlap.
