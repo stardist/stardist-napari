@@ -108,7 +108,7 @@ The plugin does perform input validation, i.e. it will disable the `Run` button 
 - If you have technical questions or found a bug, feel free to [open an issue](https://github.com/stardist/stardist-napari/issues).
 
 
-## Other ressources
+## Other resources
 
 A demonstration of an earlier version of the plugin is shown in [this video](https://www.youtube.com/watch?v=Km1_TnUQ4FM&list=PLilvrWT8aLuZCaOkjucLjvDu2YRtCS-JT&index=5).
 
