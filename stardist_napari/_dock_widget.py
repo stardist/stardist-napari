@@ -1683,10 +1683,12 @@ def _plugin_wrapper():
     # -------------------------------------------------------------------------
 
     # allow some widgets to shrink because their size depends on user input
-    plugin.image.native.setMinimumWidth(240)
-    plugin.model2d.native.setMinimumWidth(240)
-    plugin.model3d.native.setMinimumWidth(240)
-    plugin.timelapse_opts.native.setMinimumWidth(240)
+    # int() -> cf. https://github.com/stardist/stardist-napari/actions/runs/3291915518/jobs/5426658873
+    w = int(240)
+    plugin.image.native.setMinimumWidth(w)
+    plugin.model2d.native.setMinimumWidth(w)
+    plugin.model3d.native.setMinimumWidth(w)
+    plugin.timelapse_opts.native.setMinimumWidth(w)
 
     plugin.label_head.native.setOpenExternalLinks(True)
     # make reset button smaller
