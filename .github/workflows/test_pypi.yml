@@ -17,6 +17,9 @@ jobs:
           # https://github.com/napari/napari/issues/4747
           - python-version: "3.7"
             platform: ubuntu-latest
+          # https://github.com/stardist/stardist-napari/actions/runs/3296039829/jobs/5435237724
+          - python-version: "3.10"
+            platform: macos-latest
 
     steps:
       - uses: actions/checkout@v3
