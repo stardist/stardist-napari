@@ -29,7 +29,7 @@ setup(
     author_email="research@uweschmidt.org, martin.weigert@epfl.ch",
     license="BSD 3-Clause License",
     packages=find_packages(),
-    python_requires=">=3.7",
+    python_requires=">=3.8",
     package_data={"stardist_napari": ["resources/*", "napari.yaml"]},
     entry_points={"napari.manifest": ["stardist-napari = stardist_napari:napari.yaml"]},
     classifiers=[
@@ -38,7 +38,6 @@ setup(
         "Topic :: Scientific/Engineering",
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
