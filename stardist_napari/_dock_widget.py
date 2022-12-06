@@ -110,7 +110,8 @@ def change_handler(*widgets, init=True, debug=DEBUG):
             emitter = Signal.current_emitter()
             if debug:
                 # print(f"{emitter}: {source} = {args!r}")
-                print(f"{str(emitter.name).upper()}: {source.name} = {args!r}")
+                print(f"EVENT '{str(emitter.name)}': {source.name:>20} = {args!r}")
+                # print(f"                 {source.name:>14}.value = {source.value}")
             return handler(*args)
 
         for widget in widgets:
@@ -1185,7 +1186,7 @@ def _plugin_wrapper():
                 if plugin.viewer.value is not None:
                     self.viewer = plugin.viewer.value
                     if DEBUG:
-                        print("GOT viewer")
+                        print("GOT viewer\n")
 
                     self.viewer.dims.events.ndisplay.connect(_fov)
 
@@ -1433,8 +1434,7 @@ def _plugin_wrapper():
             # widgets_valid(plugin.call_button, valid=all_valid)
             if self.debug:
                 print(
-                    f"valid ({all_valid}):",
-                    ", ".join([f"{k}={v}" for k, v in vars(self.valid).items()]),
+                    f"UPDATER {all_valid}: {', '.join(f'{k}={v}' for k, v in vars(self.valid).items())}\n"
                 )
 
     update = Updater()
@@ -1456,11 +1456,11 @@ def _plugin_wrapper():
 
     # ensure that percentile low < percentile high
     @change_handler(plugin.perc_low)
-    def _perc_low_change():
+    def _perc_low_change(_value):
         plugin.perc_high.value = max(plugin.perc_low.value + 0.01, plugin.perc_high.value)
 
     @change_handler(plugin.perc_high)
-    def _perc_high_change():
+    def _perc_high_change(_value):
         plugin.perc_low.value = min(plugin.perc_low.value, plugin.perc_high.value - 0.01)
 
     @change_handler(plugin.norm_axes)
@@ -1612,7 +1612,7 @@ def _plugin_wrapper():
 
     # -> triggered by _image_change
     @change_handler(plugin.n_tiles, init=False)
-    def _n_tiles_change():
+    def _n_tiles_change(_value):
         image = plugin.image.value
         try:
             image is not None or _raise(ValueError("no image selected"))
@@ -1634,7 +1634,7 @@ def _plugin_wrapper():
 
     # -> triggered by _image_change
     @change_handler(plugin.input_scale, init=False)
-    def _input_scale_change():
+    def _input_scale_change(_value):
         image = plugin.image.value
         try:
             image is not None or _raise(ValueError("no image selected"))
@@ -1672,7 +1672,7 @@ def _plugin_wrapper():
 
     # output type changed
     @change_handler(plugin.output_type, init=False)
-    def _output_type_change():
+    def _output_type_change(_value):
         update._update()
 
     # restore defaults
@@ -1715,6 +1715,9 @@ def _plugin_wrapper():
     # if there are existing image layers on plugin launch
     if plugin.image.value is not None:
         plugin.image.changed(plugin.image.value)
+
+    if DEBUG:
+        print("BUILT plugin\n")
 
     return plugin, plugin_function
 
