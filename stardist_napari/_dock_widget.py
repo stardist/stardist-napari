@@ -1552,6 +1552,7 @@ def _plugin_wrapper():
     # -------------------------------------------------------------------------
 
     # -> triggered by napari (if there are any open images on plugin launch)
+    #    -> not true anymore since napari 0.4.17
     @change_handler(plugin.image, init=False)
     def _image_change(image: napari.layers.Image):
         shape = get_data(image).shape
@@ -1709,6 +1710,11 @@ def _plugin_wrapper():
 
     # for i in range(layout.count()):
     #     print(i, layout.itemAt(i).widget())
+
+    # necessary since napari 0.4.17 to trigger change event
+    # if there are existing image layers on plugin launch
+    if plugin.image.value is not None:
+        plugin.image.changed(plugin.image.value)
 
     return plugin, plugin_function
 
