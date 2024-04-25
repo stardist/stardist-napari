@@ -11,12 +11,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest, macos-latest]
+        platform: [ubuntu-latest, windows-latest, macos-13]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/test
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        uses: ./.github/actions/test
         with:
           python-version: ${{ matrix.python-version }}
           install-packages: "'stardist-napari[test]'"

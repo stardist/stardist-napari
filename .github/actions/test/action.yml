@@ -1,9 +1,12 @@
 name: "Run tests"
+description: "Run tests with pytest."
 
 inputs:
   python-version:
+    description: "The version of Python to use."
     required: true
   install-packages:
+    description: "The packages to install before running the tests."
     required: true
     default: "'.[test]'"
 
