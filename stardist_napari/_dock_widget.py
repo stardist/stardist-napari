@@ -46,9 +46,12 @@ if sys.version_info < (3, 9):
     # proxy type because Future is not subscriptable in Python 3.8 or lower
     _Future = List
     # register proxy type with magicgui
+    _ReturnLayerTupleType = List[LayerDataTuple]
     register_type(
         _Future[List[LayerDataTuple]], return_callback=_magicgui.add_future_data
     )
+else: 
+    _ReturnLayerTupleType = list[LayerDataTuple]
 
 SLOW_SHAPE_LAYER = True
 if version.parse(napari.__version__) >= version.parse("0.4.16"):
@@ -333,7 +336,7 @@ def _plugin_wrapper():
         timelapse_opts: TimelapseLabels = DEFAULTS["timelapse_opts"],
         cnn_output: bool = DEFAULTS["cnn_output"],
         image_data: Any = None,
-    ) -> List[LayerDataTuple]:
+    ) -> _ReturnLayerTupleType:
 
         if image_data is None:
             x = get_data(image)
@@ -435,12 +438,11 @@ def _plugin_wrapper():
                     show_tile_progress=progress,
                     scale=input_scale,
                     sparse=(not cnn_output),
-                    return_predict=cnn_output,
+                    return_predict=cnn_output                    
                 ):
                     msg = progress_msg(out)
                     if msg is not None:
                         yield msg
-
                 res.append(out)
                 yield "time", (1, n_frames)
             res = tuple(zip(*res))
@@ -513,6 +515,7 @@ def _plugin_wrapper():
 
         else:
             pred = None
+            
             for pred in model._predict_instances_generator(
                 x,
                 axes=axes,
@@ -527,7 +530,7 @@ def _plugin_wrapper():
                 msg = progress_msg(pred)
                 if msg is not None:
                     yield msg
-
+            
             if model._is_multiclass():
                 _labels = pred[0][0] if cnn_output else pred[0]
                 _polys = pred[0][1] if cnn_output else pred[1]
@@ -537,7 +540,7 @@ def _plugin_wrapper():
             else:
                 labels_multiclass = None
         # endregion
-
+        
         # region: create output layer
         layer_axes_from = "".join(axes_out)
         layer_axes_to = axes.replace("C", "") if image.rgb else axes
@@ -871,7 +874,7 @@ def _plugin_wrapper():
         cnn_output,
         set_thresholds,
         defaults_button,
-    ) -> _Future[List[LayerDataTuple]]:
+    ) -> _Future[_ReturnLayerTupleType]:
 
         model = get_model(
             model_type,
@@ -881,7 +884,6 @@ def _plugin_wrapper():
                 CUSTOM_MODEL: model_folder,
             }[model_type],
         )
-
         x = get_data(image)
         axes = axes_check_and_normalize(axes, length=x.ndim)
 

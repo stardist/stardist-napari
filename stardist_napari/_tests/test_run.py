@@ -204,6 +204,9 @@ if __name__ == "__main__":
         data.test_image_nuclei_2d()
     )
     out, kwargs = test_fluo_2d(plugin, nuclei_2d)
+    
+    
+    
     # plugin, img = make_dock_widget_function(), napari.layers.Image(data.test_image_he_2d())
     # out, kwargs = test_multiclass_2d(plugin, img)
 

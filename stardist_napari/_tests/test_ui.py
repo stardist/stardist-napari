@@ -23,3 +23,4 @@ def test_basics(make_napari_viewer, plugin, nuclei_2d):
     assert future.done()
     result = future.result()
     assert len(result) == 2
+    
