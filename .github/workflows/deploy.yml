@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           ls -l dist
-          test -f "dist/stardist-napari-${{ github.ref_name }}.tar.gz"
+          test -f "dist/stardist_napari-${{ github.ref_name }}.tar.gz"
           test -f "dist/stardist_napari-${{ github.ref_name }}-py3-none-any.whl"
 
       - name: Publish to PyPI
